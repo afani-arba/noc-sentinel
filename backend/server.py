@@ -630,6 +630,9 @@ async def health():
     return {"status": "ok"}
 
 # ── System Update Endpoints ──
+# Auto-detect app directory (works for both /app and /opt/noc-sentinel)
+APP_DIR = str(ROOT_DIR.parent)  # Parent of backend folder
+
 @api_router.get("/system/check-update")
 async def check_update(user=Depends(require_admin)):
     """Check if there are updates available from GitHub."""
@@ -639,14 +642,14 @@ async def check_update(user=Depends(require_admin)):
         # Get current commit
         current = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, cwd="/app", timeout=10
+            capture_output=True, text=True, cwd=APP_DIR, timeout=10
         )
         current_commit = current.stdout.strip() if current.returncode == 0 else None
         
         # Fetch latest from remote
         fetch = subprocess.run(
             ["git", "fetch", "origin"],
-            capture_output=True, text=True, cwd="/app", timeout=30
+            capture_output=True, text=True, cwd=APP_DIR, timeout=30
         )
         
         if fetch.returncode != 0:
@@ -660,14 +663,14 @@ async def check_update(user=Depends(require_admin)):
         # Get remote HEAD
         remote = subprocess.run(
             ["git", "rev-parse", "origin/main"],
-            capture_output=True, text=True, cwd="/app", timeout=10
+            capture_output=True, text=True, cwd=APP_DIR, timeout=10
         )
         
         # Try origin/master if main doesn't exist
         if remote.returncode != 0:
             remote = subprocess.run(
                 ["git", "rev-parse", "origin/master"],
-                capture_output=True, text=True, cwd="/app", timeout=10
+                capture_output=True, text=True, cwd=APP_DIR, timeout=10
             )
         
         if remote.returncode != 0:
@@ -685,7 +688,7 @@ async def check_update(user=Depends(require_admin)):
         if has_update:
             count = subprocess.run(
                 ["git", "rev-list", "--count", f"HEAD..origin/main"],
-                capture_output=True, text=True, cwd="/app", timeout=10
+                capture_output=True, text=True, cwd=APP_DIR, timeout=10
             )
             if count.returncode == 0:
                 commits_behind = int(count.stdout.strip())
@@ -710,20 +713,22 @@ async def perform_update(user=Depends(require_admin)):
     import subprocess
     
     log = []
+    backend_dir = str(ROOT_DIR)
+    frontend_dir = str(ROOT_DIR.parent / "frontend")
     
     try:
         # Step 1: Git pull
         log.append("Menjalankan git pull...")
         pull = subprocess.run(
             ["git", "pull", "origin", "main"],
-            capture_output=True, text=True, cwd="/app", timeout=60
+            capture_output=True, text=True, cwd=APP_DIR, timeout=60
         )
         
         # Try master if main fails
         if pull.returncode != 0:
             pull = subprocess.run(
                 ["git", "pull", "origin", "master"],
-                capture_output=True, text=True, cwd="/app", timeout=60
+                capture_output=True, text=True, cwd=APP_DIR, timeout=60
             )
         
         if pull.returncode != 0:
@@ -736,7 +741,7 @@ async def perform_update(user=Depends(require_admin)):
         log.append("Menginstall dependensi backend...")
         pip = subprocess.run(
             ["pip", "install", "-r", "requirements.txt"],
-            capture_output=True, text=True, cwd="/app/backend", timeout=120
+            capture_output=True, text=True, cwd=backend_dir, timeout=120
         )
         if pip.returncode == 0:
             log.append("Dependensi backend terinstall")
@@ -747,7 +752,7 @@ async def perform_update(user=Depends(require_admin)):
         log.append("Menginstall dependensi frontend...")
         yarn = subprocess.run(
             ["yarn", "install"],
-            capture_output=True, text=True, cwd="/app/frontend", timeout=120
+            capture_output=True, text=True, cwd=frontend_dir, timeout=120
         )
         if yarn.returncode == 0:
             log.append("Dependensi frontend terinstall")
@@ -758,7 +763,7 @@ async def perform_update(user=Depends(require_admin)):
         log.append("Building frontend...")
         build = subprocess.run(
             ["yarn", "build"],
-            capture_output=True, text=True, cwd="/app/frontend", timeout=300
+            capture_output=True, text=True, cwd=frontend_dir, timeout=300
         )
         if build.returncode == 0:
             log.append("Frontend build berhasil")
@@ -774,11 +779,19 @@ async def perform_update(user=Depends(require_admin)):
             subprocess.run(["sudo", "supervisorctl", "restart", "frontend"], timeout=10)
             log.append("Services di-restart via supervisor")
         except Exception:
-            # Try systemd (for self-hosted)
-            try:
-                subprocess.run(["sudo", "systemctl", "restart", "noc-sentinel"], timeout=10)
-                log.append("Service di-restart via systemd")
-            except Exception:
+            # Try systemd (for self-hosted) - try common service names
+            restarted = False
+            for svc_name in ["noc-backend", "noc-sentinel", "noc-sentinel-backend"]:
+                try:
+                    result = subprocess.run(["sudo", "systemctl", "restart", svc_name], 
+                                          capture_output=True, timeout=10)
+                    if result.returncode == 0:
+                        log.append(f"Service {svc_name} di-restart via systemd")
+                        restarted = True
+                        break
+                except Exception:
+                    continue
+            if not restarted:
                 log.append("Note: Silakan restart service secara manual jika diperlukan")
         
         log.append("Success! Update selesai.")

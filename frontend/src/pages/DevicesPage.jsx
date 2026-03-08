@@ -17,7 +17,7 @@ export default function DevicesPage() {
   const [testing, setTesting] = useState("");
   const [form, setForm] = useState({
     name: "", ip_address: "", snmp_community: "public", snmp_port: 161,
-    api_mode: "rest", api_username: "admin", api_password: "", api_port: 443, api_ssl: true, api_plaintext_login: true, description: "",
+    api_mode: "rest", api_username: "admin", api_password: "", api_port: "", api_ssl: true, api_plaintext_login: true, description: "",
   });
 
   const fetchDevices = useCallback(async () => {
@@ -258,13 +258,13 @@ export default function DevicesPage() {
                     <SelectContent>
                       {form.api_mode === "api" ? (
                         <>
-                          <SelectItem value="false">Tanpa SSL (Port 8728)</SelectItem>
-                          <SelectItem value="true">Dengan SSL (Port 8729)</SelectItem>
+                          <SelectItem value="false">Tanpa SSL</SelectItem>
+                          <SelectItem value="true">Dengan SSL</SelectItem>
                         </>
                       ) : (
                         <>
-                          <SelectItem value="true">HTTPS (Port 443)</SelectItem>
-                          <SelectItem value="false">HTTP (Port 80)</SelectItem>
+                          <SelectItem value="true">HTTPS</SelectItem>
+                          <SelectItem value="false">HTTP</SelectItem>
                         </>
                       )}
                     </SelectContent>
