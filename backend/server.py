@@ -60,7 +60,8 @@ class DeviceCreate(BaseModel):
     api_mode: str = "rest"  # "rest" (RouterOS 7+) or "api" (RouterOS 6+)
     api_username: str = "admin"
     api_password: str = ""
-    api_port: int = 443
+    api_port: Optional[int] = None
+    ssl_port: Optional[int] = None
     api_ssl: bool = True
     api_plaintext_login: bool = True
     description: str = ""
@@ -74,6 +75,7 @@ class DeviceUpdate(BaseModel):
     api_username: Optional[str] = None
     api_password: Optional[str] = None
     api_port: Optional[int] = None
+    ssl_port: Optional[int] = None
     api_ssl: Optional[bool] = None
     api_plaintext_login: Optional[bool] = None
     description: Optional[str] = None

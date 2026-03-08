@@ -17,7 +17,7 @@ export default function DevicesPage() {
   const [testing, setTesting] = useState("");
   const [form, setForm] = useState({
     name: "", ip_address: "", snmp_community: "public", snmp_port: 161,
-    api_mode: "rest", api_username: "admin", api_password: "", api_port: "", api_ssl: true, api_plaintext_login: true, description: "",
+    api_mode: "rest", api_username: "admin", api_password: "", api_port: "", ssl_port: "", api_ssl: true, api_plaintext_login: true, description: "",
   });
 
   const fetchDevices = useCallback(async () => {
@@ -33,7 +33,7 @@ export default function DevicesPage() {
   const openAdd = () => {
     setEditing(null);
     // Port dikosongkan agar user bebas mengisi nilainya
-    setForm({ name: "", ip_address: "", snmp_community: "public", snmp_port: 161, api_mode: "rest", api_username: "admin", api_password: "", api_port: "", api_ssl: true, api_plaintext_login: true, description: "" });
+    setForm({ name: "", ip_address: "", snmp_community: "public", snmp_port: 161, api_mode: "rest", api_username: "admin", api_password: "", api_port: "", ssl_port: "", api_ssl: true, api_plaintext_login: true, description: "" });
     setDialogOpen(true);
   };
 
@@ -42,8 +42,9 @@ export default function DevicesPage() {
     setForm({
       name: d.name, ip_address: d.ip_address || "", snmp_community: "public", snmp_port: d.snmp_port || 161,
       api_mode: d.api_mode || "rest", api_username: d.api_username || "admin", api_password: "",
-      api_port: d.api_port || "",  // Biarkan kosong jika tidak ada, user bisa isi bebas
-      api_ssl: d.api_ssl !== undefined ? d.api_ssl : (d.api_mode !== "api"),
+      api_port: d.api_port || "",
+      ssl_port: d.ssl_port || "",
+      api_ssl: d.api_ssl !== undefined ? d.api_ssl : true,
       api_plaintext_login: d.api_plaintext_login !== undefined ? d.api_plaintext_login : true,
       description: d.description || "",
     });
@@ -52,10 +53,14 @@ export default function DevicesPage() {
 
   const handleSave = async () => {
     try {
-      // Jika port kosong, gunakan default berdasarkan mode
-      const defaultPort = form.api_mode === "api" ? 8728 : 443;
-      const apiPort = form.api_port ? parseInt(form.api_port) : defaultPort;
-      const data = { ...form, snmp_port: parseInt(form.snmp_port)||161, api_port: apiPort };
+      const apiPort = form.api_port ? parseInt(form.api_port) : null;
+      const sslPort = form.ssl_port ? parseInt(form.ssl_port) : null;
+      const data = { 
+        ...form, 
+        snmp_port: parseInt(form.snmp_port) || 161, 
+        api_port: apiPort,
+        ssl_port: sslPort,
+      };
       if (editing) {
         if (!data.api_password) delete data.api_password;
         if (!data.snmp_community || data.snmp_community === "public") delete data.snmp_community;
@@ -237,16 +242,29 @@ export default function DevicesPage() {
                 <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">API Password</Label>
                   <Input type="password" value={form.api_password} onChange={e => setForm({...form, api_password:e.target.value})} className="rounded-sm bg-background" placeholder={editing?"(unchanged)":""} data-testid="device-form-api-password" /></div>
               </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">API Port</Label>
-                <Input 
-                  type="number" 
-                  value={form.api_port} 
-                  onChange={e => setForm({...form, api_port:e.target.value})} 
-                  className="rounded-sm bg-background font-mono text-xs" 
-                  placeholder="Masukkan port API"
-                  data-testid="device-form-api-port" 
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">API Port</Label>
+                  <Input 
+                    type="number" 
+                    value={form.api_port} 
+                    onChange={e => setForm({...form, api_port:e.target.value})} 
+                    className="rounded-sm bg-background font-mono text-xs" 
+                    placeholder="Masukkan port API"
+                    data-testid="device-form-api-port" 
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">SSL/WWW Port</Label>
+                  <Input 
+                    type="number" 
+                    value={form.ssl_port || ""} 
+                    onChange={e => setForm({...form, ssl_port: e.target.value})} 
+                    className="rounded-sm bg-background font-mono text-xs" 
+                    placeholder="Masukkan port SSL/WWW"
+                    data-testid="device-form-ssl-port" 
+                  />
+                </div>
               </div>
             </div>
             <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Description</Label>
