@@ -1,18 +1,17 @@
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, status
+from fastapi import FastAPI, APIRouter, Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os
-import logging
+import os, logging, asyncio, uuid
 from pathlib import Path
-from pydantic import BaseModel, Field
-from typing import List, Optional
-import uuid
+from pydantic import BaseModel
+from typing import Optional
 from datetime import datetime, timezone, timedelta
 import jwt
 from passlib.context import CryptContext
-import random
+import snmp_service
+from mikrotik_api import MikroTikAPI, get_api_client
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -30,7 +29,10 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Models ---
+POLL_INTERVAL = 30
+polling_task = None
+
+# ── Models ──
 class UserLogin(BaseModel):
     username: str
     password: str
@@ -46,71 +48,68 @@ class UserUpdate(BaseModel):
     role: Optional[str] = None
     password: Optional[str] = None
 
-class TokenResponse(BaseModel):
-    token: str
-    user: dict
-
-class PPPoEUserCreate(BaseModel):
-    username: str
-    password: str
-    profile: str
-    service: str = "pppoe"
-    ip_address: str = ""
-    mac_address: str = ""
-    comment: str = ""
-
-class PPPoEUserUpdate(BaseModel):
-    username: Optional[str] = None
-    password: Optional[str] = None
-    profile: Optional[str] = None
-    service: Optional[str] = None
-    ip_address: Optional[str] = None
-    mac_address: Optional[str] = None
-    comment: Optional[str] = None
-    status: Optional[str] = None
-
-class HotspotUserCreate(BaseModel):
-    username: str
-    password: str
-    profile: str
-    server: str = "hotspot1"
-    mac_address: str = ""
-    limit_uptime: str = ""
-    limit_bytes_total: str = ""
-    comment: str = ""
-
-class HotspotUserUpdate(BaseModel):
-    username: Optional[str] = None
-    password: Optional[str] = None
-    profile: Optional[str] = None
-    server: Optional[str] = None
-    mac_address: Optional[str] = None
-    limit_uptime: Optional[str] = None
-    limit_bytes_total: Optional[str] = None
-    comment: Optional[str] = None
-    status: Optional[str] = None
-
 class DeviceCreate(BaseModel):
     name: str
     ip_address: str
-    port: int = 8728
-    username: str = "admin"
-    password: str = ""
+    snmp_community: str = "public"
+    snmp_port: int = 161
+    api_username: str = "admin"
+    api_password: str = ""
+    api_port: int = 443
+    api_ssl: bool = True
     description: str = ""
 
+class DeviceUpdate(BaseModel):
+    name: Optional[str] = None
+    ip_address: Optional[str] = None
+    snmp_community: Optional[str] = None
+    snmp_port: Optional[int] = None
+    api_username: Optional[str] = None
+    api_password: Optional[str] = None
+    api_port: Optional[int] = None
+    api_ssl: Optional[bool] = None
+    description: Optional[str] = None
+
+class PPPoEUserCreate(BaseModel):
+    name: str
+    password: str
+    profile: str = "default"
+    service: str = "pppoe"
+    comment: str = ""
+
+class PPPoEUserUpdate(BaseModel):
+    name: Optional[str] = None
+    password: Optional[str] = None
+    profile: Optional[str] = None
+    service: Optional[str] = None
+    comment: Optional[str] = None
+    disabled: Optional[str] = None
+
+class HotspotUserCreate(BaseModel):
+    name: str
+    password: str
+    profile: str = "default"
+    server: str = "all"
+    comment: str = ""
+
+class HotspotUserUpdate(BaseModel):
+    name: Optional[str] = None
+    password: Optional[str] = None
+    profile: Optional[str] = None
+    server: Optional[str] = None
+    comment: Optional[str] = None
+    disabled: Optional[str] = None
+
 class ReportRequest(BaseModel):
-    period: str  # "daily", "weekly", "monthly"
+    period: str
     device_id: Optional[str] = None
 
-# --- Auth Helpers ---
+# ── Auth ──
 def create_token(user_data: dict) -> str:
-    payload = {
-        "sub": user_data["id"],
-        "username": user_data["username"],
-        "role": user_data["role"],
-        "exp": datetime.now(timezone.utc) + timedelta(hours=24)
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+    return jwt.encode({
+        "sub": user_data["id"], "username": user_data["username"],
+        "role": user_data["role"], "exp": datetime.now(timezone.utc) + timedelta(hours=24)
+    }, JWT_SECRET, algorithm="HS256")
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
@@ -129,483 +128,460 @@ async def require_admin(user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
-# --- Seed Data ---
+async def require_write(user=Depends(get_current_user)):
+    if user["role"] == "viewer":
+        raise HTTPException(status_code=403, detail="Viewer cannot modify data")
+    return user
+
+# ── Startup ──
 @app.on_event("startup")
-async def seed_data():
-    admin = await db.admin_users.find_one({"username": "admin"})
-    if not admin:
+async def startup():
+    # Create default admin only
+    if not await db.admin_users.find_one({"username": "admin"}):
         await db.admin_users.insert_one({
-            "id": str(uuid.uuid4()),
-            "username": "admin",
+            "id": str(uuid.uuid4()), "username": "admin",
             "password": pwd_context.hash("admin123"),
-            "full_name": "Administrator",
-            "role": "administrator",
+            "full_name": "Administrator", "role": "administrator",
             "created_at": datetime.now(timezone.utc).isoformat()
         })
-        logger.info("Default admin user created: admin / admin123")
+        logger.info("Default admin created: admin / admin123")
+    # Drop old mock collections
+    for col in ["pppoe_users", "hotspot_users", "status_checks"]:
+        await db.drop_collection(col)
+    # Start polling
+    global polling_task
+    polling_task = asyncio.create_task(polling_loop())
+    logger.info("SNMP polling started (interval %ss)", POLL_INTERVAL)
 
-    pppoe_count = await db.pppoe_users.count_documents({})
-    if pppoe_count == 0:
-        profiles = ["10Mbps", "20Mbps", "50Mbps", "100Mbps"]
-        for i in range(25):
-            await db.pppoe_users.insert_one({
-                "id": str(uuid.uuid4()),
-                "username": f"pppoe_user_{i+1}",
-                "password": f"pass{i+1}",
-                "profile": random.choice(profiles),
-                "service": "pppoe",
-                "ip_address": f"10.0.{random.randint(1,10)}.{random.randint(1,254)}",
-                "mac_address": ":".join([f"{random.randint(0,255):02x}" for _ in range(6)]),
-                "status": random.choice(["active", "active", "active", "disabled"]),
-                "uptime": f"{random.randint(0,30)}d {random.randint(0,23)}h",
-                "bytes_in": random.randint(100000000, 50000000000),
-                "bytes_out": random.randint(50000000, 10000000000),
-                "comment": f"Customer {i+1}",
-                "device_id": "default",
-                "created_at": datetime.now(timezone.utc).isoformat()
+@app.on_event("shutdown")
+async def shutdown():
+    if polling_task:
+        polling_task.cancel()
+    client.close()
+
+# ── Polling ──
+async def poll_single_device(device):
+    did = device["id"]
+    host, port, comm = device["ip_address"], device.get("snmp_port", 161), device.get("snmp_community", "public")
+    try:
+        result = await asyncio.wait_for(snmp_service.poll_device(host, port, comm), timeout=25)
+    except (asyncio.TimeoutError, Exception):
+        result = {"reachable": False, "ping": {"reachable": False, "avg": 0, "jitter": 0, "loss": 100},
+                  "system": {}, "cpu": 0, "memory": {"total": 0, "used": 0, "percent": 0}, "interfaces": [], "traffic": {}}
+
+    now = datetime.now(timezone.utc).isoformat()
+    update = {"status": "online" if result["reachable"] else "offline", "last_poll": now, "last_poll_data": result}
+    if result["reachable"] and result.get("system"):
+        s = result["system"]
+        update.update({"model": s.get("board_name", ""), "sys_name": s.get("sys_name", ""),
+                        "ros_version": s.get("ros_version", ""), "uptime": s.get("uptime_formatted", ""),
+                        "serial": s.get("serial", ""), "cpu_load": result.get("cpu", 0),
+                        "memory_usage": result.get("memory", {}).get("percent", 0)})
+    await db.devices.update_one({"id": did}, {"$set": update})
+
+    # Bandwidth calculation from octets diff
+    prev = await db.traffic_snapshots.find_one({"device_id": did})
+    curr_traffic = result.get("traffic", {})
+    if prev and curr_traffic:
+        prev_t = prev.get("traffic", {})
+        try:
+            delta = max((datetime.fromisoformat(now) - datetime.fromisoformat(prev["timestamp"])).total_seconds(), 1)
+        except Exception:
+            delta = POLL_INTERVAL
+        bw = {}
+        for iface, cv in curr_traffic.items():
+            pv = prev_t.get(iface, {})
+            if pv:
+                ind = max(0, cv["in_octets"] - pv.get("in_octets", 0))
+                outd = max(0, cv["out_octets"] - pv.get("out_octets", 0))
+                if ind > 2**62: ind = 0
+                if outd > 2**62: outd = 0
+                bw[iface] = {"download_bps": round((ind * 8) / delta), "upload_bps": round((outd * 8) / delta), "status": cv.get("status", "down")}
+        if bw:
+            await db.traffic_history.insert_one({
+                "device_id": did, "timestamp": now, "bandwidth": bw,
+                "ping_ms": result.get("ping", {}).get("avg", 0),
+                "jitter_ms": result.get("ping", {}).get("jitter", 0),
+                "cpu": result.get("cpu", 0), "memory_percent": result.get("memory", {}).get("percent", 0),
             })
-        logger.info("Seeded 25 PPPoE users")
+    await db.traffic_snapshots.update_one({"device_id": did}, {"$set": {"device_id": did, "timestamp": now, "traffic": curr_traffic}}, upsert=True)
+    return result
 
-    hotspot_count = await db.hotspot_users.count_documents({})
-    if hotspot_count == 0:
-        profiles = ["1hour", "3hour", "1day", "1week", "1month"]
-        servers = ["hotspot1", "hotspot2"]
-        for i in range(25):
-            await db.hotspot_users.insert_one({
-                "id": str(uuid.uuid4()),
-                "username": f"hotspot_user_{i+1}",
-                "password": f"hs{i+1}",
-                "profile": random.choice(profiles),
-                "server": random.choice(servers),
-                "mac_address": ":".join([f"{random.randint(0,255):02x}" for _ in range(6)]),
-                "limit_uptime": f"{random.randint(1,24)}h",
-                "limit_bytes_total": str(random.randint(100, 5000)) + "M",
-                "status": random.choice(["active", "active", "expired", "disabled"]),
-                "uptime": f"{random.randint(0,23)}h {random.randint(0,59)}m",
-                "bytes_in": random.randint(10000000, 5000000000),
-                "bytes_out": random.randint(5000000, 1000000000),
-                "comment": f"Voucher {i+1}",
-                "device_id": "default",
-                "created_at": datetime.now(timezone.utc).isoformat()
-            })
-        logger.info("Seeded 25 hotspot users")
+async def polling_loop():
+    while True:
+        try:
+            devices = await db.devices.find({}, {"_id": 0}).to_list(100)
+            if devices:
+                await asyncio.gather(*[poll_single_device(d) for d in devices], return_exceptions=True)
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+            await db.traffic_history.delete_many({"timestamp": {"$lt": cutoff}})
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Poll loop: {e}")
+        await asyncio.sleep(POLL_INTERVAL)
 
-    device_count = await db.devices.count_documents({})
-    if device_count == 0:
-        devices = [
-            {"name": "Router-Core-01", "ip_address": "192.168.1.1", "port": 8728, "model": "CCR1036-12G-4S", "status": "online", "cpu_load": 23, "memory_usage": 45, "uptime": "45d 12h 30m"},
-            {"name": "Router-Distribution-01", "ip_address": "192.168.1.2", "port": 8728, "model": "RB4011iGS+", "status": "online", "cpu_load": 15, "memory_usage": 32, "uptime": "30d 8h 15m"},
-            {"name": "AP-Hotspot-01", "ip_address": "192.168.1.10", "port": 8728, "model": "cAP ac", "status": "online", "cpu_load": 8, "memory_usage": 28, "uptime": "15d 3h 45m"},
-            {"name": "Router-Backup-01", "ip_address": "192.168.1.3", "port": 8728, "model": "hEX S", "status": "offline", "cpu_load": 0, "memory_usage": 0, "uptime": "0d 0h 0m"},
-        ]
-        for d in devices:
-            d["id"] = str(uuid.uuid4())
-            d["username"] = "admin"
-            d["password"] = ""
-            d["description"] = f"MikroTik {d['model']}"
-            d["created_at"] = datetime.now(timezone.utc).isoformat()
-            await db.devices.insert_one(d)
-        logger.info("Seeded 4 devices")
+# ── Helper: get MikroTik API client for a device ──
+async def _get_mt_api(device_id: str) -> tuple:
+    device = await db.devices.find_one({"id": device_id}, {"_id": 0})
+    if not device:
+        raise HTTPException(404, "Device not found")
+    return get_api_client(device), device
 
-# --- Auth Routes ---
+# ── Auth Routes ──
 @api_router.post("/auth/login")
 async def login(data: UserLogin):
     user = await db.admin_users.find_one({"username": data.username}, {"_id": 0})
     if not user or not pwd_context.verify(data.password, user["password"]):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_token(user)
-    user_safe = {k: v for k, v in user.items() if k != "password"}
-    return {"token": token, "user": user_safe}
+        raise HTTPException(401, "Invalid credentials")
+    return {"token": create_token(user), "user": {k: v for k, v in user.items() if k != "password"}}
 
 @api_router.get("/auth/me")
 async def get_me(user=Depends(get_current_user)):
     return {k: v for k, v in user.items() if k != "password"}
 
-# --- Mock interfaces per device model ---
-DEVICE_INTERFACES = {
-    "CCR1036-12G-4S": ["ether1-WAN", "ether2-LAN", "ether3-LAN", "ether4-LAN", "sfp1-Uplink", "sfp2-Backup", "bridge-local", "pppoe-out1"],
-    "RB4011iGS+": ["ether1-WAN", "ether2-LAN", "ether3-LAN", "ether4-DMZ", "sfp-plus1", "bridge-local", "pppoe-out1"],
-    "cAP ac": ["ether1-LAN", "wlan1-2GHz", "wlan2-5GHz", "bridge-hotspot"],
-    "hEX S": ["ether1-WAN", "ether2-LAN", "ether3-LAN", "sfp1", "bridge-local"],
-    "Unknown": ["ether1", "ether2", "ether3", "bridge-local"],
-}
+# ── Devices ──
+SAFE_DEVICE_FIELDS = {"_id": 0, "snmp_community": 0, "api_password": 0, "last_poll_data": 0}
 
-# --- Dashboard ---
-@api_router.get("/dashboard/interfaces")
-async def get_device_interfaces(device_id: str = "", user=Depends(get_current_user)):
-    """Return available interfaces for a device."""
-    if not device_id:
-        return ["ether1-WAN", "ether2-LAN", "ether3-LAN", "bridge-local", "pppoe-out1", "all"]
-    device = await db.devices.find_one({"id": device_id}, {"_id": 0})
-    if not device:
-        return ["ether1", "ether2", "bridge-local", "all"]
-    model = device.get("model", "Unknown")
-    interfaces = DEVICE_INTERFACES.get(model, DEVICE_INTERFACES["Unknown"])
-    return interfaces + ["all"]
-
-@api_router.get("/dashboard/stats")
-async def get_dashboard_stats(device_id: str = "", interface: str = "", user=Depends(get_current_user)):
-    # Filter queries by device_id if specified
-    pppoe_query = {"device_id": device_id} if device_id else {}
-    hotspot_query = {"device_id": device_id} if device_id else {}
-
-    pppoe_total = await db.pppoe_users.count_documents(pppoe_query)
-    pppoe_active = await db.pppoe_users.count_documents({**pppoe_query, "status": "active"})
-    hotspot_total = await db.hotspot_users.count_documents(hotspot_query)
-    hotspot_active = await db.hotspot_users.count_documents({**hotspot_query, "status": "active"})
-    devices_total = await db.devices.count_documents({})
-    devices_online = await db.devices.count_documents({"status": "online"})
-
-    # Get selected device info for system health
-    selected_device = None
-    if device_id:
-        selected_device = await db.devices.find_one({"id": device_id}, {"_id": 0})
-
-    # Scale traffic based on interface type
-    iface = interface or "all"
-    if "WAN" in iface or "Uplink" in iface or iface == "all":
-        dl_range = (100, 800)
-        ul_range = (50, 400)
-    elif "pppoe" in iface:
-        dl_range = (80, 600)
-        ul_range = (30, 300)
-    elif "wlan" in iface or "hotspot" in iface:
-        dl_range = (20, 200)
-        ul_range = (10, 100)
-    else:
-        dl_range = (30, 300)
-        ul_range = (15, 150)
-
-    # Mock traffic data with ping and jitter
-    now = datetime.now(timezone.utc)
-    traffic_data = []
-    base_ping = random.randint(5, 25)
-    for i in range(24):
-        t = now - timedelta(hours=23-i)
-        ping_val = base_ping + random.randint(-3, 15)
-        jitter_val = max(0.5, round(random.uniform(0.5, 8.0) + (random.random() * 5 if random.random() > 0.85 else 0), 1))
-        traffic_data.append({
-            "time": t.strftime("%H:%M"),
-            "download": random.randint(*dl_range),
-            "upload": random.randint(*ul_range),
-            "ping": max(1, ping_val),
-            "jitter": jitter_val,
-        })
-
-    # Mock bandwidth by profile
-    bandwidth_by_profile = [
-        {"name": "10Mbps", "users": random.randint(5, 20), "bandwidth": random.randint(30, 80)},
-        {"name": "20Mbps", "users": random.randint(3, 15), "bandwidth": random.randint(40, 120)},
-        {"name": "50Mbps", "users": random.randint(2, 10), "bandwidth": random.randint(60, 200)},
-        {"name": "100Mbps", "users": random.randint(1, 8), "bandwidth": random.randint(100, 400)},
-    ]
-
-    # Contextual alerts based on device
-    device_name = selected_device["name"] if selected_device else "Router-Core-01"
-    alerts = [
-        {"id": "1", "type": "warning", "message": f"High CPU on {device_name} (89%)", "time": "5 min ago"},
-        {"id": "2", "type": "error", "message": "Router-Backup-01 offline", "time": "15 min ago"},
-        {"id": "3", "type": "info", "message": "PPPoE user pppoe_user_12 connected", "time": "30 min ago"},
-        {"id": "4", "type": "success", "message": "Firmware update completed on AP-Hotspot-01", "time": "1 hour ago"},
-        {"id": "5", "type": "warning", "message": "Memory usage 85% on Router-Distribution-01", "time": "2 hours ago"},
-    ]
-
-    # System health from device data or random
-    if selected_device and selected_device.get("status") == "online":
-        sys_health = {
-            "cpu": selected_device.get("cpu_load", random.randint(15, 85)),
-            "memory": selected_device.get("memory_usage", random.randint(30, 75)),
-            "disk": random.randint(20, 60),
-            "temperature": random.randint(35, 65),
-        }
-    else:
-        sys_health = {
-            "cpu": random.randint(15, 85),
-            "memory": random.randint(30, 75),
-            "disk": random.randint(20, 60),
-            "temperature": random.randint(35, 65),
-        }
-
-    return {
-        "pppoe": {"total": pppoe_total, "active": pppoe_active},
-        "hotspot": {"total": hotspot_total, "active": hotspot_active},
-        "devices": {"total": devices_total, "online": devices_online},
-        "total_bandwidth": {"download": random.randint(800, 1500), "upload": random.randint(300, 700)},
-        "traffic_data": traffic_data,
-        "bandwidth_by_profile": bandwidth_by_profile,
-        "alerts": alerts,
-        "selected_interface": iface,
-        "system_health": sys_health,
-    }
-
-# --- PPPoE Users ---
-@api_router.get("/pppoe-users")
-async def list_pppoe_users(search: str = "", status: str = "", user=Depends(get_current_user)):
-    query = {}
-    if search:
-        query["$or"] = [
-            {"username": {"$regex": search, "$options": "i"}},
-            {"ip_address": {"$regex": search, "$options": "i"}},
-            {"mac_address": {"$regex": search, "$options": "i"}},
-            {"comment": {"$regex": search, "$options": "i"}},
-        ]
-    if status:
-        query["status"] = status
-    users = await db.pppoe_users.find(query, {"_id": 0}).to_list(1000)
-    return users
-
-@api_router.post("/pppoe-users", status_code=201)
-async def create_pppoe_user(data: PPPoEUserCreate, user=Depends(get_current_user)):
-    if user["role"] == "viewer":
-        raise HTTPException(status_code=403, detail="Viewers cannot create users")
-    doc = data.model_dump()
-    doc["id"] = str(uuid.uuid4())
-    doc["status"] = "active"
-    doc["uptime"] = "0d 0h"
-    doc["bytes_in"] = 0
-    doc["bytes_out"] = 0
-    doc["device_id"] = "default"
-    doc["created_at"] = datetime.now(timezone.utc).isoformat()
-    await db.pppoe_users.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
-
-@api_router.put("/pppoe-users/{user_id}")
-async def update_pppoe_user(user_id: str, data: PPPoEUserUpdate, user=Depends(get_current_user)):
-    if user["role"] == "viewer":
-        raise HTTPException(status_code=403, detail="Viewers cannot edit users")
-    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
-    if not update_data:
-        raise HTTPException(status_code=400, detail="No fields to update")
-    result = await db.pppoe_users.update_one({"id": user_id}, {"$set": update_data})
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="User not found")
-    updated = await db.pppoe_users.find_one({"id": user_id}, {"_id": 0})
-    return updated
-
-@api_router.delete("/pppoe-users/{user_id}")
-async def delete_pppoe_user(user_id: str, user=Depends(require_admin)):
-    result = await db.pppoe_users.delete_one({"id": user_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="User not found")
-    return {"message": "User deleted"}
-
-# --- Hotspot Users ---
-@api_router.get("/hotspot-users")
-async def list_hotspot_users(search: str = "", status: str = "", user=Depends(get_current_user)):
-    query = {}
-    if search:
-        query["$or"] = [
-            {"username": {"$regex": search, "$options": "i"}},
-            {"mac_address": {"$regex": search, "$options": "i"}},
-            {"comment": {"$regex": search, "$options": "i"}},
-        ]
-    if status:
-        query["status"] = status
-    users = await db.hotspot_users.find(query, {"_id": 0}).to_list(1000)
-    return users
-
-@api_router.post("/hotspot-users", status_code=201)
-async def create_hotspot_user(data: HotspotUserCreate, user=Depends(get_current_user)):
-    if user["role"] == "viewer":
-        raise HTTPException(status_code=403, detail="Viewers cannot create users")
-    doc = data.model_dump()
-    doc["id"] = str(uuid.uuid4())
-    doc["status"] = "active"
-    doc["uptime"] = "0h 0m"
-    doc["bytes_in"] = 0
-    doc["bytes_out"] = 0
-    doc["device_id"] = "default"
-    doc["created_at"] = datetime.now(timezone.utc).isoformat()
-    await db.hotspot_users.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
-
-@api_router.put("/hotspot-users/{user_id}")
-async def update_hotspot_user(user_id: str, data: HotspotUserUpdate, user=Depends(get_current_user)):
-    if user["role"] == "viewer":
-        raise HTTPException(status_code=403, detail="Viewers cannot edit users")
-    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
-    if not update_data:
-        raise HTTPException(status_code=400, detail="No fields to update")
-    result = await db.hotspot_users.update_one({"id": user_id}, {"$set": update_data})
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="User not found")
-    updated = await db.hotspot_users.find_one({"id": user_id}, {"_id": 0})
-    return updated
-
-@api_router.delete("/hotspot-users/{user_id}")
-async def delete_hotspot_user(user_id: str, user=Depends(require_admin)):
-    result = await db.hotspot_users.delete_one({"id": user_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="User not found")
-    return {"message": "User deleted"}
-
-# --- Devices ---
 @api_router.get("/devices")
 async def list_devices(user=Depends(get_current_user)):
-    devices = await db.devices.find({}, {"_id": 0}).to_list(100)
-    return devices
+    return await db.devices.find({}, SAFE_DEVICE_FIELDS).to_list(100)
+
+@api_router.get("/devices/full")
+async def list_devices_full(user=Depends(require_admin)):
+    devs = await db.devices.find({}, {"_id": 0}).to_list(100)
+    for d in devs:
+        d.pop("last_poll_data", None)
+    return devs
 
 @api_router.post("/devices", status_code=201)
 async def create_device(data: DeviceCreate, user=Depends(require_admin)):
     doc = data.model_dump()
     doc["id"] = str(uuid.uuid4())
-    doc["status"] = "online"
-    doc["model"] = "Unknown"
-    doc["cpu_load"] = 0
-    doc["memory_usage"] = 0
-    doc["uptime"] = "0d 0h 0m"
-    doc["created_at"] = datetime.now(timezone.utc).isoformat()
+    doc.update({"status": "unknown", "model": "", "sys_name": "", "ros_version": "",
+                "uptime": "", "serial": "", "cpu_load": 0, "memory_usage": 0,
+                "created_at": datetime.now(timezone.utc).isoformat()})
     await db.devices.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
+    asyncio.create_task(poll_single_device(doc))
+    safe = {k: v for k, v in doc.items() if k not in ("_id", "snmp_community", "api_password", "last_poll_data")}
+    return safe
+
+@api_router.put("/devices/{device_id}")
+async def update_device(device_id: str, data: DeviceUpdate, user=Depends(require_admin)):
+    upd = {k: v for k, v in data.model_dump().items() if v is not None}
+    if not upd:
+        raise HTTPException(400, "Nothing to update")
+    r = await db.devices.update_one({"id": device_id}, {"$set": upd})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Device not found")
+    return await db.devices.find_one({"id": device_id}, SAFE_DEVICE_FIELDS)
 
 @api_router.delete("/devices/{device_id}")
 async def delete_device(device_id: str, user=Depends(require_admin)):
-    result = await db.devices.delete_one({"id": device_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Device not found")
-    return {"message": "Device deleted"}
+    r = await db.devices.delete_one({"id": device_id})
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Device not found")
+    await db.traffic_history.delete_many({"device_id": device_id})
+    await db.traffic_snapshots.delete_one({"device_id": device_id})
+    return {"message": "Deleted"}
 
-# --- Reports ---
+@api_router.post("/devices/{device_id}/test-snmp")
+async def test_snmp(device_id: str, user=Depends(get_current_user)):
+    d = await db.devices.find_one({"id": device_id}, {"_id": 0})
+    if not d:
+        raise HTTPException(404, "Device not found")
+    snmp_result = await snmp_service.test_connection(d["ip_address"], d.get("snmp_port", 161), d.get("snmp_community", "public"))
+    ping_result = await snmp_service.ping_host(d["ip_address"])
+    return {"snmp": snmp_result, "ping": ping_result}
+
+@api_router.post("/devices/{device_id}/test-api")
+async def test_api(device_id: str, user=Depends(get_current_user)):
+    mt, _ = await _get_mt_api(device_id)
+    return await mt.test_connection()
+
+@api_router.post("/devices/{device_id}/poll")
+async def trigger_poll(device_id: str, user=Depends(get_current_user)):
+    d = await db.devices.find_one({"id": device_id}, {"_id": 0})
+    if not d:
+        raise HTTPException(404, "Device not found")
+    r = await poll_single_device(d)
+    return {"reachable": r["reachable"]}
+
+@api_router.post("/devices/test-new")
+async def test_new(data: DeviceCreate, user=Depends(get_current_user)):
+    snmp_r = await snmp_service.test_connection(data.ip_address, data.snmp_port, data.snmp_community)
+    ping_r = await snmp_service.ping_host(data.ip_address)
+    mt = MikroTikAPI(data.ip_address, data.api_username, data.api_password, data.api_port, data.api_ssl)
+    api_r = await mt.test_connection()
+    return {"snmp": snmp_r, "ping": ping_r, "api": api_r}
+
+# ── Dashboard ──
+@api_router.get("/dashboard/stats")
+async def dashboard_stats(device_id: str = "", interface: str = "", user=Depends(get_current_user)):
+    all_devs = await db.devices.find({}, SAFE_DEVICE_FIELDS).to_list(100)
+    online = sum(1 for d in all_devs if d.get("status") == "online")
+    device = await db.devices.find_one({"id": device_id}, {"_id": 0}) if device_id else None
+
+    query = {"device_id": device_id} if device_id else {}
+    history = await db.traffic_history.find(query, {"_id": 0}).sort("timestamp", -1).to_list(200)
+    history.reverse()
+
+    traffic_data = []
+    for h in history[-60:]:
+        try:
+            time_label = datetime.fromisoformat(h["timestamp"]).strftime("%H:%M")
+        except Exception:
+            time_label = ""
+        bw = h.get("bandwidth", {})
+        if interface and interface != "all":
+            ib = bw.get(interface, {})
+            dl, ul = ib.get("download_bps", 0), ib.get("upload_bps", 0)
+        else:
+            dl = sum(v.get("download_bps", 0) for v in bw.values())
+            ul = sum(v.get("upload_bps", 0) for v in bw.values())
+        traffic_data.append({"time": time_label, "download": round(dl / 1e6, 2), "upload": round(ul / 1e6, 2),
+                             "ping": h.get("ping_ms", 0), "jitter": h.get("jitter_ms", 0)})
+
+    ifaces = []
+    if device and device.get("last_poll_data"):
+        ifaces = [i["name"] for i in device["last_poll_data"].get("interfaces", [])]
+
+    sys_h = {"cpu": 0, "memory": 0}
+    if device:
+        sys_h = {"cpu": device.get("cpu_load", 0), "memory": device.get("memory_usage", 0)}
+
+    alerts = []
+    for d in all_devs:
+        if d.get("status") == "offline":
+            alerts.append({"id": d["id"], "type": "error", "message": f"{d['name']} OFFLINE", "time": (d.get("last_poll") or "")[:16]})
+        if d.get("cpu_load", 0) > 80:
+            alerts.append({"id": d["id"]+"c", "type": "warning", "message": f"CPU {d['cpu_load']}% on {d['name']}", "time": (d.get("last_poll") or "")[:16]})
+        if d.get("memory_usage", 0) > 80:
+            alerts.append({"id": d["id"]+"m", "type": "warning", "message": f"Memory {d['memory_usage']}% on {d['name']}", "time": (d.get("last_poll") or "")[:16]})
+    if not alerts:
+        alerts.append({"id": "ok", "type": "success", "message": "All systems normal", "time": datetime.now(timezone.utc).strftime("%H:%M")})
+
+    last = traffic_data[-1] if traffic_data else {"download": 0, "upload": 0}
+    return {
+        "devices": {"total": len(all_devs), "online": online},
+        "total_bandwidth": {"download": last["download"], "upload": last["upload"]},
+        "traffic_data": traffic_data, "alerts": alerts,
+        "system_health": sys_h, "interfaces": ifaces,
+        "selected_device": {"name": device.get("name",""), "model": device.get("model",""),
+                            "uptime": device.get("uptime",""), "ros_version": device.get("ros_version",""),
+                            "status": device.get("status",""), "ip_address": device.get("ip_address","")} if device else None,
+    }
+
+@api_router.get("/dashboard/interfaces")
+async def dashboard_interfaces(device_id: str = "", user=Depends(get_current_user)):
+    if not device_id:
+        return ["all"]
+    device = await db.devices.find_one({"id": device_id}, {"_id": 0})
+    if not device or not device.get("last_poll_data"):
+        return ["all"]
+    return ["all"] + [i["name"] for i in device["last_poll_data"].get("interfaces", [])]
+
+# ── PPPoE Users (via MikroTik REST API) ──
+@api_router.get("/pppoe-users")
+async def list_pppoe_users(device_id: str = "", search: str = "", user=Depends(get_current_user)):
+    if not device_id:
+        return []
+    try:
+        mt, _ = await _get_mt_api(device_id)
+        secrets = await mt.list_pppoe_secrets()
+        active_list = await mt.list_pppoe_active()
+    except Exception as e:
+        raise HTTPException(502, f"MikroTik API error: {e}")
+    active_names = {a.get("name", "") for a in active_list}
+    result = []
+    for s in secrets:
+        s["is_online"] = s.get("name", "") in active_names
+        if search and search.lower() not in str(s).lower():
+            continue
+        result.append(s)
+    return result
+
+@api_router.post("/pppoe-users", status_code=201)
+async def create_pppoe_user(device_id: str, data: PPPoEUserCreate, user=Depends(require_write)):
+    mt, _ = await _get_mt_api(device_id)
+    body = {k: v for k, v in data.model_dump().items() if v}
+    try:
+        return await mt.create_pppoe_secret(body)
+    except Exception as e:
+        raise HTTPException(502, f"MikroTik: {e}")
+
+@api_router.put("/pppoe-users/{mt_id}")
+async def update_pppoe_user(mt_id: str, device_id: str, data: PPPoEUserUpdate, user=Depends(require_write)):
+    mt, _ = await _get_mt_api(device_id)
+    body = {k: v for k, v in data.model_dump().items() if v is not None}
+    try:
+        return await mt.update_pppoe_secret(mt_id, body)
+    except Exception as e:
+        raise HTTPException(502, f"MikroTik: {e}")
+
+@api_router.delete("/pppoe-users/{mt_id}")
+async def delete_pppoe_user(mt_id: str, device_id: str, user=Depends(require_admin)):
+    mt, _ = await _get_mt_api(device_id)
+    try:
+        return await mt.delete_pppoe_secret(mt_id)
+    except Exception as e:
+        raise HTTPException(502, f"MikroTik: {e}")
+
+@api_router.get("/pppoe-active")
+async def list_pppoe_active(device_id: str, user=Depends(get_current_user)):
+    mt, _ = await _get_mt_api(device_id)
+    try:
+        return await mt.list_pppoe_active()
+    except Exception as e:
+        raise HTTPException(502, f"MikroTik: {e}")
+
+# ── Hotspot Users (via MikroTik REST API) ──
+@api_router.get("/hotspot-users")
+async def list_hotspot_users(device_id: str = "", search: str = "", user=Depends(get_current_user)):
+    if not device_id:
+        return []
+    try:
+        mt, _ = await _get_mt_api(device_id)
+        users = await mt.list_hotspot_users()
+        active_list = await mt.list_hotspot_active()
+    except Exception as e:
+        raise HTTPException(502, f"MikroTik API error: {e}")
+    active_names = {a.get("user", "") for a in active_list}
+    result = []
+    for u in users:
+        u["is_online"] = u.get("name", "") in active_names
+        if search and search.lower() not in str(u).lower():
+            continue
+        result.append(u)
+    return result
+
+@api_router.post("/hotspot-users", status_code=201)
+async def create_hotspot_user(device_id: str, data: HotspotUserCreate, user=Depends(require_write)):
+    mt, _ = await _get_mt_api(device_id)
+    body = {k: v for k, v in data.model_dump().items() if v}
+    try:
+        return await mt.create_hotspot_user(body)
+    except Exception as e:
+        raise HTTPException(502, f"MikroTik: {e}")
+
+@api_router.put("/hotspot-users/{mt_id}")
+async def update_hotspot_user(mt_id: str, device_id: str, data: HotspotUserUpdate, user=Depends(require_write)):
+    mt, _ = await _get_mt_api(device_id)
+    body = {k: v for k, v in data.model_dump().items() if v is not None}
+    try:
+        return await mt.update_hotspot_user(mt_id, body)
+    except Exception as e:
+        raise HTTPException(502, f"MikroTik: {e}")
+
+@api_router.delete("/hotspot-users/{mt_id}")
+async def delete_hotspot_user(mt_id: str, device_id: str, user=Depends(require_admin)):
+    mt, _ = await _get_mt_api(device_id)
+    try:
+        return await mt.delete_hotspot_user(mt_id)
+    except Exception as e:
+        raise HTTPException(502, f"MikroTik: {e}")
+
+@api_router.get("/hotspot-active")
+async def list_hotspot_active(device_id: str, user=Depends(get_current_user)):
+    mt, _ = await _get_mt_api(device_id)
+    try:
+        return await mt.list_hotspot_active()
+    except Exception as e:
+        raise HTTPException(502, f"MikroTik: {e}")
+
+# ── Reports ──
 @api_router.post("/reports/generate")
 async def generate_report(data: ReportRequest, user=Depends(get_current_user)):
     now = datetime.now(timezone.utc)
-    if data.period == "daily":
-        start = now - timedelta(days=1)
-        label = "Daily Report"
-        intervals = 24
-    elif data.period == "weekly":
-        start = now - timedelta(weeks=1)
-        label = "Weekly Report"
-        intervals = 7
+    hours = {"daily": 24, "weekly": 168, "monthly": 720}
+    h = hours.get(data.period, 24)
+    start = now - timedelta(hours=h)
+    label = {"daily": "Daily Report", "weekly": "Weekly Report", "monthly": "Monthly Report"}.get(data.period, "Report")
+
+    all_devs = await db.devices.find({}, {"_id": 0, "snmp_community": 0, "api_password": 0, "last_poll_data": 0}).to_list(100)
+    query = {"timestamp": {"$gte": start.isoformat()}}
+    if data.device_id:
+        query["device_id"] = data.device_id
+    history = await db.traffic_history.find(query, {"_id": 0}).sort("timestamp", 1).to_list(5000)
+
+    trend = []
+    for h_item in history:
+        try:
+            dt = datetime.fromisoformat(h_item["timestamp"])
+            tl = dt.strftime("%H:%M") if data.period == "daily" else dt.strftime("%d/%m %H:%M")
+        except Exception:
+            tl = ""
+        bw = h_item.get("bandwidth", {})
+        dl = sum(v.get("download_bps", 0) for v in bw.values())
+        ul = sum(v.get("upload_bps", 0) for v in bw.values())
+        trend.append({"time": tl, "download": round(dl / 1e6, 2), "upload": round(ul / 1e6, 2),
+                      "ping": h_item.get("ping_ms", 0), "jitter": h_item.get("jitter_ms", 0)})
+
+    if trend:
+        avg_dl = round(sum(t["download"] for t in trend) / len(trend), 2)
+        avg_ul = round(sum(t["upload"] for t in trend) / len(trend), 2)
+        peak_dl = round(max(t["download"] for t in trend), 2)
+        peak_ul = round(max(t["upload"] for t in trend), 2)
+        avg_ping = round(sum(t["ping"] for t in trend) / len(trend), 1)
+        avg_jitter = round(sum(t["jitter"] for t in trend) / len(trend), 1)
     else:
-        start = now - timedelta(days=30)
-        label = "Monthly Report"
-        intervals = 30
+        avg_dl = avg_ul = peak_dl = peak_ul = avg_ping = avg_jitter = 0
 
-    pppoe_total = await db.pppoe_users.count_documents({})
-    pppoe_active = await db.pppoe_users.count_documents({"status": "active"})
-    hotspot_total = await db.hotspot_users.count_documents({})
-    hotspot_active = await db.hotspot_users.count_documents({"status": "active"})
-    devices_total = await db.devices.count_documents({})
-    devices_online = await db.devices.count_documents({"status": "online"})
-
-    traffic_trend = []
-    for i in range(intervals):
-        if data.period == "daily":
-            t = start + timedelta(hours=i)
-            time_label = t.strftime("%H:%M")
-        elif data.period == "weekly":
-            t = start + timedelta(days=i)
-            time_label = t.strftime("%a")
-        else:
-            t = start + timedelta(days=i)
-            time_label = t.strftime("%d/%m")
-        traffic_trend.append({
-            "time": time_label,
-            "download": random.randint(100, 800),
-            "upload": random.randint(50, 400),
-            "active_users": random.randint(10, 50),
-        })
-
-    top_users = []
-    pppoe_users = await db.pppoe_users.find({}, {"_id": 0}).sort("bytes_in", -1).to_list(10)
-    for u in pppoe_users:
-        top_users.append({
-            "username": u["username"],
-            "type": "PPPoE",
-            "download": u.get("bytes_in", 0),
-            "upload": u.get("bytes_out", 0),
-            "profile": u.get("profile", ""),
-        })
-
+    dev_summary = [{"name": d["name"], "ip_address": d.get("ip_address",""), "model": d.get("model",""),
+                    "status": d.get("status","unknown"), "cpu": d.get("cpu_load",0),
+                    "memory": d.get("memory_usage",0), "uptime": d.get("uptime","")} for d in all_devs]
     return {
-        "label": label,
-        "period": data.period,
-        "generated_at": now.isoformat(),
-        "start_date": start.isoformat(),
-        "end_date": now.isoformat(),
-        "summary": {
-            "pppoe": {"total": pppoe_total, "active": pppoe_active},
-            "hotspot": {"total": hotspot_total, "active": hotspot_active},
-            "devices": {"total": devices_total, "online": devices_online},
-            "avg_bandwidth": {"download": random.randint(500, 1200), "upload": random.randint(200, 600)},
-            "peak_bandwidth": {"download": random.randint(1200, 2000), "upload": random.randint(600, 1000)},
-        },
-        "traffic_trend": traffic_trend,
-        "top_users": top_users,
+        "label": label, "period": data.period, "generated_at": now.isoformat(),
+        "start_date": start.isoformat(), "end_date": now.isoformat(),
+        "summary": {"devices": {"total": len(all_devs), "online": sum(1 for d in all_devs if d.get("status")=="online")},
+                     "avg_bandwidth": {"download": avg_dl, "upload": avg_ul},
+                     "peak_bandwidth": {"download": peak_dl, "upload": peak_ul},
+                     "avg_ping": avg_ping, "avg_jitter": avg_jitter},
+        "traffic_trend": trend[-300:], "device_summary": dev_summary,
     }
 
-# --- Admin Users ---
+# ── Admin Users ──
 @api_router.get("/admin/users")
 async def list_admin_users(user=Depends(require_admin)):
-    users = await db.admin_users.find({}, {"_id": 0, "password": 0}).to_list(100)
-    return users
+    return await db.admin_users.find({}, {"_id": 0, "password": 0}).to_list(100)
 
 @api_router.post("/admin/users", status_code=201)
 async def create_admin_user(data: UserCreate, user=Depends(require_admin)):
-    existing = await db.admin_users.find_one({"username": data.username})
-    if existing:
-        raise HTTPException(status_code=400, detail="Username already exists")
+    if await db.admin_users.find_one({"username": data.username}):
+        raise HTTPException(400, "Username exists")
     if data.role not in ["administrator", "viewer", "user"]:
-        raise HTTPException(status_code=400, detail="Invalid role")
-    doc = {
-        "id": str(uuid.uuid4()),
-        "username": data.username,
-        "password": pwd_context.hash(data.password),
-        "full_name": data.full_name,
-        "role": data.role,
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
+        raise HTTPException(400, "Invalid role")
+    doc = {"id": str(uuid.uuid4()), "username": data.username,
+           "password": pwd_context.hash(data.password), "full_name": data.full_name,
+           "role": data.role, "created_at": datetime.now(timezone.utc).isoformat()}
     await db.admin_users.insert_one(doc)
-    return {k: v for k, v in doc.items() if k not in ["_id", "password"]}
+    return {k: v for k, v in doc.items() if k not in ("_id", "password")}
 
 @api_router.put("/admin/users/{user_id}")
 async def update_admin_user(user_id: str, data: UserUpdate, user=Depends(require_admin)):
-    update_data = {}
-    if data.full_name is not None:
-        update_data["full_name"] = data.full_name
+    upd = {}
+    if data.full_name is not None: upd["full_name"] = data.full_name
     if data.role is not None:
-        if data.role not in ["administrator", "viewer", "user"]:
-            raise HTTPException(status_code=400, detail="Invalid role")
-        update_data["role"] = data.role
-    if data.password is not None:
-        update_data["password"] = pwd_context.hash(data.password)
-    if not update_data:
-        raise HTTPException(status_code=400, detail="No fields to update")
-    result = await db.admin_users.update_one({"id": user_id}, {"$set": update_data})
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="User not found")
-    updated = await db.admin_users.find_one({"id": user_id}, {"_id": 0, "password": 0})
-    return updated
+        if data.role not in ["administrator","viewer","user"]: raise HTTPException(400,"Invalid role")
+        upd["role"] = data.role
+    if data.password is not None: upd["password"] = pwd_context.hash(data.password)
+    if not upd: raise HTTPException(400, "Nothing to update")
+    r = await db.admin_users.update_one({"id": user_id}, {"$set": upd})
+    if r.matched_count == 0: raise HTTPException(404, "Not found")
+    return await db.admin_users.find_one({"id": user_id}, {"_id": 0, "password": 0})
 
 @api_router.delete("/admin/users/{user_id}")
 async def delete_admin_user(user_id: str, user=Depends(require_admin)):
     target = await db.admin_users.find_one({"id": user_id}, {"_id": 0})
-    if not target:
-        raise HTTPException(status_code=404, detail="User not found")
-    if target["id"] == user["id"]:
-        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    if not target: raise HTTPException(404, "Not found")
+    if target["id"] == user["id"]: raise HTTPException(400, "Cannot delete yourself")
     await db.admin_users.delete_one({"id": user_id})
-    return {"message": "User deleted"}
+    return {"message": "Deleted"}
 
-# --- Health ---
 @api_router.get("/health")
 async def health():
     return {"status": "ok"}
 
 app.include_router(api_router)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+app.add_middleware(CORSMiddleware, allow_credentials=True,
+    allow_origins=os.environ.get('CORS_ORIGINS','*').split(','), allow_methods=["*"], allow_headers=["*"])
