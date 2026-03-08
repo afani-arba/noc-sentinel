@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import api from "@/lib/api";
 import {
   Server, ArrowDown, ArrowUp, Cpu, HardDrive, Activity, Monitor, Network,
-  AlertTriangle, AlertCircle, Info, CheckCircle2, RefreshCw
+  AlertTriangle, AlertCircle, Info, CheckCircle2, RefreshCw, Thermometer, Zap, Battery
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
@@ -94,12 +94,15 @@ export default function DashboardPage() {
       </div>
 
       {sd && (
-        <div className="flex items-center gap-4 px-4 py-2.5 bg-card border border-border rounded-sm text-xs animate-fade-in" data-testid="device-info-bar">
+        <div className="flex flex-wrap items-center gap-4 px-4 py-2.5 bg-card border border-border rounded-sm text-xs animate-fade-in" data-testid="device-info-bar">
           <div className={`w-2 h-2 rounded-full ${sd.status==="online"?"bg-green-500 animate-pulse":"bg-red-500"}`} />
-          <span className="font-semibold">{sd.name}</span>
+          <div>
+            <span className="font-semibold">{sd.identity || sd.name}</span>
+            {sd.model && <span className="text-muted-foreground ml-2">({sd.model})</span>}
+          </div>
           <span className="text-muted-foreground font-mono">{sd.ip_address}</span>
-          {sd.model && <Badge variant="outline" className="rounded-sm text-[10px]">{sd.model}</Badge>}
-          {sd.ros_version && <span className="text-muted-foreground">v{sd.ros_version}</span>}
+          {sd.ros_version && <Badge variant="outline" className="rounded-sm text-[10px]">v{sd.ros_version}</Badge>}
+          {sd.architecture && <Badge variant="outline" className="rounded-sm text-[10px]">{sd.architecture}</Badge>}
           {sd.uptime && <span className="text-muted-foreground">Up: <span className="font-mono text-foreground">{sd.uptime}</span></span>}
         </div>
       )}
@@ -176,20 +179,66 @@ export default function DashboardPage() {
       {/* Bottom Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="bg-card border border-border rounded-sm p-5" data-testid="system-health">
-          <h3 className="text-lg font-semibold font-['Rajdhani'] mb-4">System Health {sd && <span className="text-sm text-muted-foreground font-normal">- {sd.name}</span>}</h3>
+          <h3 className="text-lg font-semibold font-['Rajdhani'] mb-4">System Health {sd && <span className="text-sm text-muted-foreground font-normal">- {sd.identity || sd.name}</span>}</h3>
           <div className="space-y-4">
+            {/* CPU & Memory bars */}
             {[
-              { label: "CPU", value: stats.system_health.cpu, icon: Cpu },
-              { label: "Memory", value: stats.system_health.memory, icon: HardDrive },
+              { label: "CPU Load", value: stats.system_health.cpu, icon: Cpu, unit: "%" },
+              { label: "Memory", value: stats.system_health.memory, icon: HardDrive, unit: "%" },
             ].map(m => (
               <div key={m.label} className="flex items-center gap-3">
                 <m.icon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 <div className="flex-1">
-                  <div className="flex items-center justify-between mb-1"><span className="text-xs text-muted-foreground">{m.label}</span><span className="text-xs font-mono" style={{ color: m.value>80?"#ef4444":m.value>60?"#f59e0b":"#10b981" }}>{m.value}%</span></div>
+                  <div className="flex items-center justify-between mb-1"><span className="text-xs text-muted-foreground">{m.label}</span><span className="text-xs font-mono" style={{ color: m.value>80?"#ef4444":m.value>60?"#f59e0b":"#10b981" }}>{m.value}{m.unit}</span></div>
                   <div className="w-full h-1.5 bg-secondary rounded-full overflow-hidden"><div className="h-full rounded-full transition-all duration-1000" style={{ width:`${m.value}%`, backgroundColor: m.value>80?"#ef4444":m.value>60?"#f59e0b":"#10b981" }} /></div>
                 </div>
               </div>
             ))}
+            
+            {/* Temperature, Voltage, Power metrics */}
+            <div className="grid grid-cols-2 gap-3 pt-2 border-t border-border/50">
+              {stats.system_health.cpu_temp > 0 && (
+                <div className="flex items-center gap-2 p-2 rounded-sm bg-secondary/30">
+                  <Thermometer className="w-4 h-4 text-orange-500" />
+                  <div>
+                    <p className="text-[10px] text-muted-foreground">CPU Temp</p>
+                    <p className="text-sm font-mono" style={{ color: stats.system_health.cpu_temp > 70 ? "#ef4444" : stats.system_health.cpu_temp > 50 ? "#f59e0b" : "#10b981" }}>{stats.system_health.cpu_temp}°C</p>
+                  </div>
+                </div>
+              )}
+              {stats.system_health.board_temp > 0 && (
+                <div className="flex items-center gap-2 p-2 rounded-sm bg-secondary/30">
+                  <Thermometer className="w-4 h-4 text-red-500" />
+                  <div>
+                    <p className="text-[10px] text-muted-foreground">Board Temp</p>
+                    <p className="text-sm font-mono" style={{ color: stats.system_health.board_temp > 60 ? "#ef4444" : stats.system_health.board_temp > 45 ? "#f59e0b" : "#10b981" }}>{stats.system_health.board_temp}°C</p>
+                  </div>
+                </div>
+              )}
+              {stats.system_health.voltage > 0 && (
+                <div className="flex items-center gap-2 p-2 rounded-sm bg-secondary/30">
+                  <Zap className="w-4 h-4 text-yellow-500" />
+                  <div>
+                    <p className="text-[10px] text-muted-foreground">Voltage</p>
+                    <p className="text-sm font-mono">{stats.system_health.voltage}V</p>
+                  </div>
+                </div>
+              )}
+              {stats.system_health.power > 0 && (
+                <div className="flex items-center gap-2 p-2 rounded-sm bg-secondary/30">
+                  <Battery className="w-4 h-4 text-green-500" />
+                  <div>
+                    <p className="text-[10px] text-muted-foreground">Power</p>
+                    <p className="text-sm font-mono">{stats.system_health.power}W</p>
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            {/* Show message if no extended metrics available */}
+            {stats.system_health.cpu_temp === 0 && stats.system_health.board_temp === 0 && stats.system_health.voltage === 0 && stats.system_health.power === 0 && (
+              <p className="text-xs text-muted-foreground/50 text-center pt-2">Extended metrics not available for this device</p>
+            )}
           </div>
         </div>
         <div className="bg-card border border-border rounded-sm p-5" data-testid="recent-alerts">

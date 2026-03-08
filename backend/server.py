@@ -171,21 +171,35 @@ async def poll_single_device(device):
         result = await asyncio.wait_for(snmp_service.poll_device(host, port, comm), timeout=25)
     except (asyncio.TimeoutError, Exception):
         result = {"reachable": False, "ping": {"reachable": False, "avg": 0, "jitter": 0, "loss": 100},
-                  "system": {}, "cpu": 0, "memory": {"total": 0, "used": 0, "percent": 0}, "interfaces": [], "traffic": {}}
+                  "system": {}, "cpu": 0, "memory": {"total": 0, "used": 0, "percent": 0}, "interfaces": [], "traffic": {},
+                  "health": {"cpu_temp": 0, "board_temp": 0, "voltage": 0, "power": 0}}
 
     now = datetime.now(timezone.utc).isoformat()
     update = {"status": "online" if result["reachable"] else "offline", "last_poll": now, "last_poll_data": result}
     if result["reachable"] and result.get("system"):
         s = result["system"]
-        update.update({"model": s.get("board_name", ""), "sys_name": s.get("sys_name", ""),
-                        "ros_version": s.get("ros_version", ""), "uptime": s.get("uptime_formatted", ""),
-                        "serial": s.get("serial", ""), "cpu_load": result.get("cpu", 0),
-                        "memory_usage": result.get("memory", {}).get("percent", 0)})
+        health = result.get("health", {})
+        update.update({
+            "model": s.get("board_name", ""), 
+            "sys_name": s.get("sys_name", ""),
+            "identity": s.get("identity", s.get("sys_name", "")),
+            "architecture": s.get("architecture", ""),
+            "ros_version": s.get("ros_version", ""), 
+            "uptime": s.get("uptime_formatted", ""),
+            "serial": s.get("serial", ""), 
+            "cpu_load": result.get("cpu", 0),
+            "memory_usage": result.get("memory", {}).get("percent", 0),
+            "cpu_temp": health.get("cpu_temp", 0),
+            "board_temp": health.get("board_temp", 0),
+            "voltage": health.get("voltage", 0),
+            "power": health.get("power", 0),
+        })
     await db.devices.update_one({"id": did}, {"$set": update})
 
     # Bandwidth calculation from octets diff
     prev = await db.traffic_snapshots.find_one({"device_id": did})
     curr_traffic = result.get("traffic", {})
+    ping_data = result.get("ping", {})
     if prev and curr_traffic:
         prev_t = prev.get("traffic", {})
         try:
@@ -204,8 +218,8 @@ async def poll_single_device(device):
         if bw:
             await db.traffic_history.insert_one({
                 "device_id": did, "timestamp": now, "bandwidth": bw,
-                "ping_ms": result.get("ping", {}).get("avg", 0),
-                "jitter_ms": result.get("ping", {}).get("jitter", 0),
+                "ping_ms": ping_data.get("avg", 0),
+                "jitter_ms": ping_data.get("jitter", 0),
                 "cpu": result.get("cpu", 0), "memory_percent": result.get("memory", {}).get("percent", 0),
             })
     await db.traffic_snapshots.update_one({"device_id": did}, {"$set": {"device_id": did, "timestamp": now, "traffic": curr_traffic}}, upsert=True)
@@ -333,7 +347,11 @@ async def dashboard_stats(device_id: str = "", interface: str = "", user=Depends
     traffic_data = []
     for h in history[-60:]:
         try:
-            time_label = datetime.fromisoformat(h["timestamp"]).strftime("%H:%M")
+            # Convert UTC to local time display (add 7 hours for WIB)
+            utc_time = datetime.fromisoformat(h["timestamp"].replace("Z", "+00:00"))
+            # Use device's local time if available, otherwise show UTC+7 (WIB)
+            local_time = utc_time.replace(tzinfo=None) + timedelta(hours=7)
+            time_label = local_time.strftime("%H:%M")
         except Exception:
             time_label = ""
         bw = h.get("bandwidth", {})
@@ -350,9 +368,21 @@ async def dashboard_stats(device_id: str = "", interface: str = "", user=Depends
     if device and device.get("last_poll_data"):
         ifaces = [i["name"] for i in device["last_poll_data"].get("interfaces", [])]
 
-    sys_h = {"cpu": 0, "memory": 0}
+    # Extended system health with temperature, voltage, power
+    sys_h = {
+        "cpu": 0, "memory": 0, 
+        "cpu_temp": 0, "board_temp": 0, 
+        "voltage": 0, "power": 0
+    }
     if device:
-        sys_h = {"cpu": device.get("cpu_load", 0), "memory": device.get("memory_usage", 0)}
+        sys_h = {
+            "cpu": device.get("cpu_load", 0), 
+            "memory": device.get("memory_usage", 0),
+            "cpu_temp": device.get("cpu_temp", 0),
+            "board_temp": device.get("board_temp", 0),
+            "voltage": device.get("voltage", 0),
+            "power": device.get("power", 0),
+        }
 
     alerts = []
     for d in all_devs:
@@ -371,9 +401,16 @@ async def dashboard_stats(device_id: str = "", interface: str = "", user=Depends
         "total_bandwidth": {"download": last["download"], "upload": last["upload"]},
         "traffic_data": traffic_data, "alerts": alerts,
         "system_health": sys_h, "interfaces": ifaces,
-        "selected_device": {"name": device.get("name",""), "model": device.get("model",""),
-                            "uptime": device.get("uptime",""), "ros_version": device.get("ros_version",""),
-                            "status": device.get("status",""), "ip_address": device.get("ip_address","")} if device else None,
+        "selected_device": {
+            "name": device.get("name",""), 
+            "model": device.get("model",""),
+            "identity": device.get("identity", device.get("sys_name", "")),
+            "uptime": device.get("uptime",""), 
+            "ros_version": device.get("ros_version",""),
+            "architecture": device.get("architecture", ""),
+            "status": device.get("status",""), 
+            "ip_address": device.get("ip_address","")
+        } if device else None,
     }
 
 @api_router.get("/dashboard/interfaces")

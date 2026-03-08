@@ -32,6 +32,15 @@ OID_MT_BOARD = '1.3.6.1.4.1.14988.1.1.7.3.0'
 OID_MT_SERIAL = '1.3.6.1.4.1.14988.1.1.7.1.0'
 OID_MT_FIRMWARE = '1.3.6.1.4.1.14988.1.1.7.4.0'
 
+# MikroTik Specific OIDs for extended health monitoring
+OID_MT_CPU_TEMP = '1.3.6.1.4.1.14988.1.1.3.10.0'  # CPU Temperature
+OID_MT_BOARD_TEMP = '1.3.6.1.4.1.14988.1.1.3.11.0'  # Board Temperature
+OID_MT_VOLTAGE = '1.3.6.1.4.1.14988.1.1.3.8.0'  # Voltage
+OID_MT_CURRENT = '1.3.6.1.4.1.14988.1.1.3.9.0'  # Current (for power calculation)
+OID_MT_POWER = '1.3.6.1.4.1.14988.1.1.3.12.0'  # Power consumption
+OID_MT_ARCHITECTURE = '1.3.6.1.4.1.14988.1.1.4.4.0'  # Architecture
+OID_MT_IDENTITY = '1.3.6.1.4.1.14988.1.1.4.3.0'  # Identity
+
 
 async def snmp_get(host, port, community, oid, timeout=4, retries=1):
     try:
@@ -118,8 +127,8 @@ async def test_connection(host, port, community):
 
 async def get_system_info(host, port, community):
     info = {}
-    keys = ["sys_name", "sys_descr", "sys_uptime", "board_name", "serial", "firmware"]
-    oids = [OID_SYS_NAME, OID_SYS_DESCR, OID_SYS_UPTIME, OID_MT_BOARD, OID_MT_SERIAL, OID_MT_FIRMWARE]
+    keys = ["sys_name", "sys_descr", "sys_uptime", "board_name", "serial", "firmware", "identity", "ros_version_alt"]
+    oids = [OID_SYS_NAME, OID_SYS_DESCR, OID_SYS_UPTIME, OID_MT_BOARD, OID_MT_SERIAL, OID_MT_FIRMWARE, OID_MT_IDENTITY, OID_MT_ARCHITECTURE]
     results = await asyncio.gather(*[snmp_get(host, port, community, o) for o in oids], return_exceptions=True)
     for key, val in zip(keys, results):
         info[key] = str(val) if val and not isinstance(val, Exception) else ""
@@ -131,10 +140,64 @@ async def get_system_info(host, port, community):
     except (ValueError, TypeError):
         info["uptime_formatted"] = "N/A"
         info["uptime_seconds"] = 0
+    
+    # Parse ROS version and architecture from sys_descr
+    # Example: "RouterOS CCR1009-7G-1C-1S+" or "RouterOS 6.49.10 (x86)"
     descr = info.get("sys_descr", "")
-    m = re.search(r'RouterOS\s+([\d.]+)', descr)
-    info["ros_version"] = m.group(1) if m else ""
+    
+    # Try to find version like "6.49.10" or "7.14.2"
+    m = re.search(r'(\d+\.\d+\.?\d*)', descr)
+    info["ros_version"] = m.group(1) if m else info.get("ros_version_alt", "")
+    
+    # Extract architecture from sys_descr if present
+    arch_match = re.search(r'\(([\w]+)\)', descr)
+    info["architecture"] = arch_match.group(1) if arch_match else ""
+    
+    # Identity fallback to sys_name if empty or just a number
+    identity = info.get("identity", "")
+    if not identity or identity.isdigit():
+        info["identity"] = info.get("sys_name", "")
+    
+    # Clean up - use firmware version if ros_version empty
+    if not info["ros_version"] and info.get("firmware"):
+        info["ros_version"] = info["firmware"]
+    
     return info
+
+
+async def get_health_metrics(host, port, community):
+    """Get extended health metrics: temperature, voltage, power."""
+    metrics = {}
+    oid_map = {
+        "cpu_temp": OID_MT_CPU_TEMP,
+        "board_temp": OID_MT_BOARD_TEMP,
+        "voltage": OID_MT_VOLTAGE,
+        "current": OID_MT_CURRENT,
+        "power": OID_MT_POWER,
+    }
+    results = await asyncio.gather(*[snmp_get(host, port, community, oid) for oid in oid_map.values()], return_exceptions=True)
+    for (key, _), val in zip(oid_map.items(), results):
+        if val and not isinstance(val, Exception):
+            try:
+                v = int(val)
+                # MikroTik returns temperature in tenths of degrees
+                if "temp" in key:
+                    metrics[key] = v / 10.0
+                # Voltage in tenths of volt
+                elif key == "voltage":
+                    metrics[key] = v / 10.0
+                # Current in mA, Power in watts
+                elif key == "current":
+                    metrics[key] = v
+                elif key == "power":
+                    metrics[key] = v / 10.0
+                else:
+                    metrics[key] = v
+            except (ValueError, TypeError):
+                metrics[key] = 0
+        else:
+            metrics[key] = 0
+    return metrics
 
 
 async def get_interfaces(host, port, community):
@@ -242,15 +305,17 @@ async def poll_device(host, port, community):
     
     if not snmp_reachable:
         return {"reachable": False, "ping": ping, "system": {}, "cpu": 0,
-                "memory": {"total": 0, "used": 0, "percent": 0}, "interfaces": [], "traffic": {}}
+                "memory": {"total": 0, "used": 0, "percent": 0}, "interfaces": [], "traffic": {},
+                "health": {"cpu_temp": 0, "board_temp": 0, "voltage": 0, "power": 0}}
     
-    # SNMP is reachable, fetch all data
-    sys_info, cpu, memory, ifaces, traffic = await asyncio.gather(
+    # SNMP is reachable, fetch all data including health metrics
+    sys_info, cpu, memory, ifaces, traffic, health = await asyncio.gather(
         get_system_info(host, port, community),
         get_cpu_load(host, port, community),
         get_memory_usage(host, port, community),
         get_interfaces(host, port, community),
         get_interface_traffic(host, port, community),
+        get_health_metrics(host, port, community),
         return_exceptions=True,
     )
     return {
@@ -260,4 +325,5 @@ async def poll_device(host, port, community):
         "memory": memory if not isinstance(memory, Exception) else {"total": 0, "used": 0, "percent": 0},
         "interfaces": ifaces if not isinstance(ifaces, Exception) else [],
         "traffic": traffic if not isinstance(traffic, Exception) else {},
+        "health": health if not isinstance(health, Exception) else {"cpu_temp": 0, "board_temp": 0, "voltage": 0, "power": 0},
     }

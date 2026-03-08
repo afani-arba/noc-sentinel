@@ -1,4 +1,4 @@
-# NOC-SENTINEL - MikroTik Monitoring Tool v2.1
+# NOC-SENTINEL - MikroTik Monitoring Tool v2.2
 
 ## Problem Statement
 MikroTik monitoring tool for Ubuntu server with real SNMP monitoring and MikroTik API integration supporting both RouterOS v6 (legacy API) and RouterOS v7 (REST API).
@@ -13,14 +13,17 @@ MikroTik monitoring tool for Ubuntu server with real SNMP monitoring and MikroTi
 ## What's Implemented (March 8, 2026)
 - [x] Login page (JWT auth, 3 roles: administrator/viewer/user)
 - [x] Dashboard: device selector, interface selector, real-time traffic/ping/jitter charts
-- [x] PPPoE Users: CRUD via MikroTik API, device selector, search, online status
-- [x] Hotspot Users: CRUD via MikroTik API, device selector, search, online status
+- [x] PPPoE Users: CRUD via MikroTik API, device selector, search, online status, **password display**
+- [x] Hotspot Users: CRUD via MikroTik API, device selector, search, online status, **password display**
 - [x] Reports: daily/weekly/monthly from SNMP history, PDF export
-- [x] Devices: SNMP + API config, test connection buttons, auto-polling
+- [x] Devices: SNMP + API config, test connection buttons, auto-polling, **scrollable dialog**
 - [x] Admin: user management with 3 roles
 - [x] SNMP polling: background task every 30s, traffic history stored in MongoDB
 - [x] All mock data REMOVED - 100% real data from MikroTik
 - [x] **RouterOS v6/v7 Support**: API mode selector with auto port/SSL switching
+- [x] **System Health Extended**: CPU/Memory Load, CPU Temp, Board Temp, Voltage, Power
+- [x] **Device Info**: Identity, Board Name, ROS Version, Architecture
+- [x] **Traffic History**: Time in WIB (UTC+7) timezone
 
 ## MikroTik Requirements
 ### RouterOS v7.1+ (REST API mode)
@@ -30,6 +33,10 @@ MikroTik monitoring tool for Ubuntu server with real SNMP monitoring and MikroTi
 ### RouterOS v6.x+ (API Protocol mode)
 - API enabled (IP > Services > api atau api-ssl)
 - Default port: 8728 (tanpa SSL) atau 8729 (dengan SSL)
+
+### SNMP Requirements
+- SNMP v2c enabled
+- Extended SNMP OIDs for health metrics (temperature, voltage, power) require MikroTik-specific MIB
 
 ## Default Credentials
 - Username: admin / Password: admin123

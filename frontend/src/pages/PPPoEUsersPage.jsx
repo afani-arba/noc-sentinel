@@ -139,6 +139,7 @@ export default function PPPoEUsersPage() {
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Username</TableHead>
+                <TableHead>Password</TableHead>
                 <TableHead>Profile</TableHead>
                 <TableHead>Service</TableHead>
                 <TableHead>Status</TableHead>
@@ -149,12 +150,13 @@ export default function PPPoEUsersPage() {
             </TableHeader>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">Connecting to MikroTik...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-8">Connecting to MikroTik...</TableCell></TableRow>
               ) : users.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">No PPPoE users found</TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-8">No PPPoE users found</TableCell></TableRow>
               ) : users.map(u => (
                 <TableRow key={u[".id"]} data-testid={`pppoe-row-${u.name}`}>
                   <TableCell className="font-mono text-xs">{u.name}</TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">{u.password || "••••••"}</TableCell>
                   <TableCell><Badge variant="outline" className="rounded-sm text-xs">{u.profile || "default"}</Badge></TableCell>
                   <TableCell className="text-xs">{u.service || "pppoe"}</TableCell>
                   <TableCell>

@@ -174,7 +174,7 @@ export default function DevicesPage() {
       )}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="rounded-sm bg-card border-border max-w-lg" data-testid="device-dialog">
+        <DialogContent className="rounded-sm bg-card border-border max-w-lg max-h-[90vh] overflow-y-auto" data-testid="device-dialog">
           <DialogHeader>
             <DialogTitle className="font-['Rajdhani'] text-xl">{editing?"Edit Device":"Add Device"}</DialogTitle>
             <DialogDescription>Configure MikroTik device with SNMP monitoring and REST API access.</DialogDescription>
