@@ -19,7 +19,11 @@ load_dotenv(ROOT_DIR / '.env')
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
-JWT_SECRET = os.environ.get('JWT_SECRET', 'fallback_secret')
+JWT_SECRET = os.environ.get('JWT_SECRET')
+if not JWT_SECRET:
+    JWT_SECRET = 'dev_secret_change_in_production'  # Only for development
+    import warnings
+    warnings.warn("JWT_SECRET not set! Using insecure default. Set JWT_SECRET environment variable in production.", UserWarning)
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")

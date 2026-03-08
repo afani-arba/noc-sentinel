@@ -1,21 +1,21 @@
 # NOC-SENTINEL - Panduan Instalasi & Deployment
 
-## MikroTik Monitoring Tool
+## MikroTik Monitoring Tool v2.3
 
 ---
 
 ## Daftar Isi
 
 1. [Persyaratan Sistem](#1-persyaratan-sistem)
-2. [Instalasi di Ubuntu Server](#2-instalasi-di-ubuntu-server)
-3. [Konfigurasi Backend](#3-konfigurasi-backend)
-4. [Konfigurasi Frontend](#4-konfigurasi-frontend)
-5. [Setup MongoDB](#5-setup-mongodb)
-6. [Menjalankan Aplikasi](#6-menjalankan-aplikasi)
-7. [Setup Nginx Reverse Proxy](#7-setup-nginx-reverse-proxy)
-8. [Setup SSL dengan Let's Encrypt](#8-setup-ssl-dengan-lets-encrypt)
-9. [Setup Systemd Service](#9-setup-systemd-service)
-10. [Deploy di Emergent Platform](#10-deploy-di-emergent-platform)
+2. [Persyaratan MikroTik](#2-persyaratan-mikrotik)
+3. [Instalasi di Ubuntu Server](#3-instalasi-di-ubuntu-server)
+4. [Konfigurasi Backend](#4-konfigurasi-backend)
+5. [Konfigurasi Frontend](#5-konfigurasi-frontend)
+6. [Setup MongoDB](#6-setup-mongodb)
+7. [Menjalankan Aplikasi](#7-menjalankan-aplikasi)
+8. [Setup Nginx Reverse Proxy](#8-setup-nginx-reverse-proxy)
+9. [Setup SSL dengan Let's Encrypt](#9-setup-ssl-dengan-lets-encrypt)
+10. [Setup Systemd Service](#10-setup-systemd-service)
 11. [Kredensial Default](#11-kredensial-default)
 12. [Troubleshooting](#12-troubleshooting)
 13. [Struktur Proyek](#13-struktur-proyek)
@@ -39,15 +39,83 @@
 
 ---
 
-## 2. Instalasi di Ubuntu Server
+## 2. Persyaratan MikroTik
 
-### 2.1 Update Sistem
+### SNMP (Wajib untuk Monitoring)
+
+Aplikasi ini menggunakan SNMP untuk monitoring real-time. Aktifkan SNMP di MikroTik:
+
+```routeros
+/snmp community
+add name=public addresses=0.0.0.0/0 read-access=yes write-access=no
+
+/snmp
+set enabled=yes contact="" location="" trap-community=public
+```
+
+**Data yang diambil via SNMP:**
+- CPU Load
+- Memory Usage
+- CPU Temperature
+- Board Temperature
+- Voltage
+- Power Consumption
+- Interface Traffic (Bandwidth)
+- System Info (Identity, Model, ROS Version)
+
+### RouterOS v7.1+ (REST API Mode)
+
+Untuk RouterOS versi 7.1 ke atas, aktifkan REST API:
+
+```routeros
+/ip service
+set www-ssl disabled=no port=443 certificate=*default
+# ATAU tanpa SSL:
+set www disabled=no port=80
+```
+
+**Konfigurasi di aplikasi:**
+- API Mode: `REST API (RouterOS 7.1+)`
+- Port: 443 (HTTPS) atau 80 (HTTP)
+- SSL: Ya (untuk port 443)
+
+### RouterOS v6.x (API Protocol Mode)
+
+Untuk RouterOS versi 6.x, aktifkan API Protocol:
+
+```routeros
+/ip service
+set api disabled=no port=8728
+# ATAU dengan SSL:
+set api-ssl disabled=no port=8729 certificate=*default
+```
+
+**Konfigurasi di aplikasi:**
+- API Mode: `API Protocol (RouterOS 6.x+)`
+- Port: 8728 (tanpa SSL) atau 8729 (dengan SSL)
+- SSL: Tidak (untuk port 8728)
+
+### Firewall (Opsional tapi Disarankan)
+
+Izinkan akses dari server monitoring:
+
+```routeros
+/ip firewall filter
+add chain=input src-address=IP_SERVER_MONITORING protocol=udp dst-port=161 action=accept comment="Allow SNMP"
+add chain=input src-address=IP_SERVER_MONITORING protocol=tcp dst-port=8728,8729,443,80 action=accept comment="Allow API"
+```
+
+---
+
+## 3. Instalasi di Ubuntu Server
+
+### 3.1 Update Sistem
 
 ```bash
 sudo apt update && sudo apt upgrade -y
 ```
 
-### 2.2 Install Dependencies
+### 3.2 Install Dependencies
 
 ```bash
 # Install Python 3.11
@@ -64,7 +132,7 @@ npm install -g yarn
 sudo apt install -y nginx
 ```
 
-### 2.3 Install MongoDB
+### 3.3 Install MongoDB
 
 ```bash
 # Import MongoDB GPG key
@@ -88,14 +156,14 @@ sudo systemctl enable mongod
 mongosh --eval "db.runCommand({ping:1})"
 ```
 
-### 2.4 Clone / Upload Proyek
+### 3.4 Clone / Upload Proyek
 
 ```bash
 # Buat direktori aplikasi
 sudo mkdir -p /opt/noc-sentinel
 sudo chown $USER:$USER /opt/noc-sentinel
 
-# Clone dari GitHub (jika sudah di-push)
+# Clone dari GitHub
 git clone https://github.com/YOUR_USERNAME/noc-sentinel.git /opt/noc-sentinel
 
 # ATAU upload manual via SCP
@@ -104,9 +172,9 @@ git clone https://github.com/YOUR_USERNAME/noc-sentinel.git /opt/noc-sentinel
 
 ---
 
-## 3. Konfigurasi Backend
+## 4. Konfigurasi Backend
 
-### 3.1 Setup Python Virtual Environment
+### 4.1 Setup Python Virtual Environment
 
 ```bash
 cd /opt/noc-sentinel/backend
@@ -120,7 +188,7 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3.2 Konfigurasi Environment Variables
+### 4.2 Konfigurasi Environment Variables
 
 ```bash
 # Edit file .env
@@ -130,16 +198,16 @@ nano /opt/noc-sentinel/backend/.env
 Isi file `.env`:
 
 ```env
-MONGO_URL="mongodb://localhost:27017"
-DB_NAME="noc_sentinel"
-CORS_ORIGINS="https://yourdomain.com,http://localhost:3000"
-JWT_SECRET="GANTI_DENGAN_SECRET_KEY_YANG_KUAT_DAN_RANDOM"
+MONGO_URL=mongodb://localhost:27017
+DB_NAME=noc_sentinel
+CORS_ORIGINS=https://yourdomain.com,http://localhost:3000
+JWT_SECRET=GANTI_DENGAN_SECRET_KEY_YANG_KUAT_DAN_RANDOM
 ```
 
 > **PENTING**: Ganti `JWT_SECRET` dengan string random yang kuat.
 > Generate dengan: `openssl rand -hex 32`
 
-### 3.3 Verifikasi Backend
+### 4.3 Verifikasi Backend
 
 ```bash
 cd /opt/noc-sentinel/backend
@@ -155,9 +223,9 @@ uvicorn server:app --host 0.0.0.0 --port 8001
 
 ---
 
-## 4. Konfigurasi Frontend
+## 5. Konfigurasi Frontend
 
-### 4.1 Install Dependencies
+### 5.1 Install Dependencies
 
 ```bash
 cd /opt/noc-sentinel/frontend
@@ -166,7 +234,7 @@ cd /opt/noc-sentinel/frontend
 yarn install
 ```
 
-### 4.2 Konfigurasi Environment Variables
+### 5.2 Konfigurasi Environment Variables
 
 ```bash
 nano /opt/noc-sentinel/frontend/.env
@@ -181,7 +249,7 @@ REACT_APP_BACKEND_URL=https://yourdomain.com
 > Ganti `yourdomain.com` dengan domain atau IP server Anda.
 > Jika belum ada domain, gunakan: `http://SERVER_IP`
 
-### 4.3 Build Frontend untuk Production
+### 5.3 Build Frontend untuk Production
 
 ```bash
 cd /opt/noc-sentinel/frontend
@@ -192,9 +260,9 @@ Hasil build akan tersimpan di folder `build/`.
 
 ---
 
-## 5. Setup MongoDB
+## 6. Setup MongoDB
 
-### 5.1 Buat Database & User (Opsional tapi Disarankan)
+### 6.1 Buat Database & User (Opsional tapi Disarankan)
 
 ```bash
 mongosh
@@ -215,10 +283,10 @@ exit
 Jika menggunakan auth, update `.env` backend:
 
 ```env
-MONGO_URL="mongodb://noc_admin:PASSWORD_YANG_KUAT@localhost:27017/noc_sentinel?authSource=noc_sentinel"
+MONGO_URL=mongodb://noc_admin:PASSWORD_YANG_KUAT@localhost:27017/noc_sentinel?authSource=noc_sentinel
 ```
 
-### 5.2 Enable MongoDB Authentication (Opsional)
+### 6.2 Enable MongoDB Authentication (Opsional)
 
 ```bash
 sudo nano /etc/mongod.conf
@@ -237,7 +305,7 @@ sudo systemctl restart mongod
 
 ---
 
-## 6. Menjalankan Aplikasi
+## 7. Menjalankan Aplikasi
 
 ### Quick Start (Development)
 
@@ -252,13 +320,13 @@ cd /opt/noc-sentinel/frontend
 yarn start
 ```
 
-### Production (lihat Section 7-9 untuk setup lengkap)
+### Production (lihat Section 8-10 untuk setup lengkap)
 
 ---
 
-## 7. Setup Nginx Reverse Proxy
+## 8. Setup Nginx Reverse Proxy
 
-### 7.1 Buat Konfigurasi Nginx
+### 8.1 Buat Konfigurasi Nginx
 
 ```bash
 sudo nano /etc/nginx/sites-available/noc-sentinel
@@ -307,7 +375,7 @@ server {
 }
 ```
 
-### 7.2 Aktifkan Konfigurasi
+### 8.2 Aktifkan Konfigurasi
 
 ```bash
 # Enable site
@@ -326,7 +394,7 @@ sudo systemctl enable nginx
 
 ---
 
-## 8. Setup SSL dengan Let's Encrypt
+## 9. Setup SSL dengan Let's Encrypt
 
 ```bash
 # Install Certbot
@@ -343,9 +411,9 @@ sudo certbot renew --dry-run
 
 ---
 
-## 9. Setup Systemd Service
+## 10. Setup Systemd Service
 
-### 9.1 Backend Service
+### 10.1 Backend Service
 
 ```bash
 sudo nano /etc/systemd/system/noc-sentinel-backend.service
@@ -373,7 +441,7 @@ StandardError=journal
 WantedBy=multi-user.target
 ```
 
-### 9.2 Aktifkan Service
+### 10.2 Aktifkan Service
 
 ```bash
 # Set permissions
@@ -390,7 +458,7 @@ sudo systemctl enable noc-sentinel-backend
 sudo systemctl status noc-sentinel-backend
 ```
 
-### 9.3 Perintah Manajemen
+### 10.3 Perintah Manajemen
 
 ```bash
 # Restart backend
@@ -402,26 +470,6 @@ sudo journalctl -u noc-sentinel-backend -f
 # Stop
 sudo systemctl stop noc-sentinel-backend
 ```
-
----
-
-## 10. Deploy di Emergent Platform
-
-Jika Anda menggunakan Emergent Platform, deployment jauh lebih sederhana:
-
-1. Klik tombol **Preview** untuk memastikan aplikasi berjalan
-2. Klik tombol **Deploy**
-3. Klik **Deploy Now** untuk publish
-4. Tunggu 10-15 menit
-5. Aplikasi akan live dengan URL publik
-
-### Custom Domain di Emergent
-1. Klik **Link Domain**
-2. Masukkan nama domain Anda
-3. Ikuti instruksi DNS yang diberikan
-4. DNS propagation: 5-15 menit (max 24 jam)
-
-**Biaya**: 50 credits/bulan per aplikasi yang di-deploy.
 
 ---
 
@@ -496,12 +544,35 @@ print(pwd.hash('admin123'))
 # mongosh noc_sentinel --eval "db.admin_users.updateOne({username:'admin'}, {\$set:{password:'HASH_DISINI'}})"
 ```
 
+### SNMP tidak dapat data
+
+```bash
+# Test SNMP dari server
+snmpwalk -v2c -c public IP_MIKROTIK 1.3.6.1.2.1.1.1.0
+
+# Pastikan SNMP enabled di MikroTik
+/snmp print
+
+# Cek firewall MikroTik
+/ip firewall filter print where dst-port=161
+```
+
+### API MikroTik gagal koneksi
+
+```bash
+# Test koneksi API (RouterOS 7+)
+curl -k -u admin:password https://IP_MIKROTIK/rest/system/resource
+
+# Test koneksi API (RouterOS 6)
+# Gunakan Winbox atau script Python dengan routeros-api library
+```
+
 ### CORS Error
 
 Pastikan `CORS_ORIGINS` di backend `.env` berisi domain frontend:
 
 ```env
-CORS_ORIGINS="https://yourdomain.com,http://localhost:3000"
+CORS_ORIGINS=https://yourdomain.com,http://localhost:3000
 ```
 
 ### Port Firewall
@@ -522,6 +593,8 @@ sudo ufw enable
 noc-sentinel/
 ├── backend/
 │   ├── server.py            # FastAPI application utama
+│   ├── snmp_service.py      # SNMP polling & monitoring
+│   ├── mikrotik_api.py      # MikroTik REST/API client
 │   ├── requirements.txt     # Python dependencies
 │   └── .env                 # Environment variables
 │
@@ -543,8 +616,23 @@ noc-sentinel/
 │   ├── package.json
 │   └── .env
 │
-└── INSTALLATION_GUIDE.md    # Panduan ini
+├── memory/
+│   └── PRD.md              # Product Requirements Document
+│
+└── INSTALLATION_GUIDE.md   # Panduan ini
 ```
+
+### Fitur Utama
+
+| Fitur | Deskripsi |
+|-------|-----------|
+| Dashboard | Monitoring real-time: Traffic, Ping, Jitter, CPU, Memory, Temperature |
+| PPPoE Users | CRUD user PPPoE via MikroTik API (dengan password) |
+| Hotspot Users | CRUD user Hotspot via MikroTik API (dengan password) |
+| Reports | Generate laporan harian/mingguan/bulanan, export PDF |
+| Devices | Manajemen device MikroTik (SNMP + API) |
+| Admin | Manajemen user aplikasi (3 role) |
+| RouterOS Support | Mendukung RouterOS v6 (API) dan v7 (REST API) |
 
 ### API Endpoints
 
@@ -564,7 +652,10 @@ noc-sentinel/
 | DELETE | /api/hotspot-users/:id      | Hapus Hotspot user             |
 | GET    | /api/devices                | List devices                   |
 | POST   | /api/devices                | Tambah device                  |
+| PUT    | /api/devices/:id            | Edit device                    |
 | DELETE | /api/devices/:id            | Hapus device                   |
+| POST   | /api/devices/:id/poll       | Trigger SNMP poll              |
+| POST   | /api/devices/test           | Test koneksi SNMP/API          |
 | POST   | /api/reports/generate       | Generate report                |
 | GET    | /api/admin/users            | List admin users               |
 | POST   | /api/admin/users            | Tambah admin user              |
@@ -604,5 +695,27 @@ uvicorn server:app --host 0.0.0.0 --port 8001
 
 ---
 
-*NOC-SENTINEL v1.0 - MikroTik Monitoring Tool*
+## Changelog
+
+### v2.3 (March 2026)
+- Support RouterOS v6 (API Protocol) dan v7 (REST API)
+- Extended System Health: CPU Temp, Board Temp, Voltage, Power
+- Ping ke 8.8.8.8 untuk monitoring latency internet
+- Password ditampilkan di tabel PPPoE & Hotspot
+- Device dialog scrollable
+- Interface selector dari SNMP data real
+- Traffic History dengan timezone WIB
+
+### v2.0 (March 2026)
+- Migrasi dari mock data ke real SNMP monitoring
+- Integrasi MikroTik REST API untuk CRUD users
+- Dashboard dengan device & interface selector
+
+### v1.0 (March 2026)
+- Initial release dengan mock data
+- UI Grafana-inspired dark theme
+
+---
+
+*NOC-SENTINEL v2.3 - MikroTik Monitoring Tool*
 *Built with React + FastAPI + MongoDB*
