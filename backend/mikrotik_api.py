@@ -72,7 +72,8 @@ class MikroTikRestAPI(MikroTikBase):
             return {"success": False, "error": str(e), "mode": "REST API (RouterOS 7+)"}
 
     async def list_pppoe_secrets(self):
-        return await self._async_req("GET", "ppp/secret")
+        # Tambahkan .proplist untuk mendapatkan semua field termasuk password
+        return await self._async_req("GET", "ppp/secret?.proplist=.id,name,password,profile,service,comment,disabled")
 
     async def create_pppoe_secret(self, data):
         return await self._async_req("PUT", "ppp/secret", data)
@@ -87,7 +88,8 @@ class MikroTikRestAPI(MikroTikBase):
         return await self._async_req("GET", "ppp/active")
 
     async def list_hotspot_users(self):
-        return await self._async_req("GET", "ip/hotspot/user")
+        # Tambahkan .proplist untuk mendapatkan semua field termasuk password
+        return await self._async_req("GET", "ip/hotspot/user?.proplist=.id,name,password,profile,server,comment,disabled")
 
     async def create_hotspot_user(self, data):
         return await self._async_req("PUT", "ip/hotspot/user", data)
