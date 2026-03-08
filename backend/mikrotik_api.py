@@ -1,18 +1,38 @@
 """
-MikroTik REST API client for CRUD operations.
-Requires RouterOS v7.1+ with REST API enabled.
-Uses /rest endpoint with HTTP Basic Auth.
+Unified MikroTik API client supporting both:
+  - RouterOS 6.x: MikroTik API protocol (port 8728/8729)
+  - RouterOS 7.x: REST API (port 443/80)
+Both implementations share the same interface.
 """
 import requests
 import asyncio
 import logging
 import urllib3
+import routeros_api
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 
-class MikroTikAPI:
+# ── Base interface ──
+class MikroTikBase:
+    async def test_connection(self): raise NotImplementedError
+    async def list_pppoe_secrets(self): raise NotImplementedError
+    async def create_pppoe_secret(self, data): raise NotImplementedError
+    async def update_pppoe_secret(self, mt_id, data): raise NotImplementedError
+    async def delete_pppoe_secret(self, mt_id): raise NotImplementedError
+    async def list_pppoe_active(self): raise NotImplementedError
+    async def list_hotspot_users(self): raise NotImplementedError
+    async def create_hotspot_user(self, data): raise NotImplementedError
+    async def update_hotspot_user(self, mt_id, data): raise NotImplementedError
+    async def delete_hotspot_user(self, mt_id): raise NotImplementedError
+    async def list_hotspot_active(self): raise NotImplementedError
+
+
+# ═══════════════════════════════════════════════════════════
+# RouterOS 7+ REST API
+# ═══════════════════════════════════════════════════════════
+class MikroTikRestAPI(MikroTikBase):
     def __init__(self, host, username, password, port=443, use_ssl=True):
         scheme = "https" if use_ssl else "http"
         self.base_url = f"{scheme}://{host}:{port}/rest"
@@ -23,102 +43,219 @@ class MikroTikAPI:
     def _request(self, method, path, data=None):
         url = f"{self.base_url}/{path}"
         try:
-            resp = requests.request(
-                method, url, auth=self.auth, json=data,
-                verify=self.verify, timeout=self.timeout,
-            )
+            resp = requests.request(method, url, auth=self.auth, json=data,
+                                    verify=self.verify, timeout=self.timeout)
             if resp.status_code == 401:
                 raise Exception("Authentication failed - check API username/password")
             if resp.status_code == 400:
                 detail = resp.json() if resp.content else {}
-                msg = detail.get("detail", detail.get("message", str(resp.text)))
-                raise Exception(f"Bad request: {msg}")
+                raise Exception(f"Bad request: {detail.get('detail', detail.get('message', resp.text))}")
             resp.raise_for_status()
             return resp.json() if resp.content else {}
         except requests.exceptions.ConnectionError:
-            raise Exception(f"Cannot connect to MikroTik REST API at {url}")
+            raise Exception(f"Cannot connect to REST API at {url}")
         except requests.exceptions.Timeout:
             raise Exception("Connection timed out")
         except Exception as e:
-            if "MikroTik" in str(e) or "Authentication" in str(e) or "Bad request" in str(e) or "Cannot connect" in str(e):
+            if any(k in str(e) for k in ["Authentication", "Bad request", "Cannot connect", "timed out"]):
                 raise
-            raise Exception(f"API error: {e}")
+            raise Exception(f"REST API error: {e}")
 
-    async def get(self, path):
-        return await asyncio.to_thread(self._request, "GET", path)
-
-    async def put(self, path, data):
-        return await asyncio.to_thread(self._request, "PUT", path, data)
-
-    async def patch(self, path, data):
-        return await asyncio.to_thread(self._request, "PATCH", path, data)
-
-    async def delete(self, path):
-        return await asyncio.to_thread(self._request, "DELETE", path)
+    async def _async_req(self, method, path, data=None):
+        return await asyncio.to_thread(self._request, method, path, data)
 
     async def test_connection(self):
         try:
-            result = await self.get("system/identity")
-            return {"success": True, "identity": result.get("name", "")}
+            r = await self._async_req("GET", "system/identity")
+            return {"success": True, "identity": r.get("name", ""), "mode": "REST API (RouterOS 7+)"}
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": str(e), "mode": "REST API (RouterOS 7+)"}
 
-    # --- PPPoE Secrets ---
     async def list_pppoe_secrets(self):
-        return await self.get("ppp/secret")
-
-    async def get_pppoe_secret(self, mikrotik_id):
-        return await self.get(f"ppp/secret/{mikrotik_id}")
+        return await self._async_req("GET", "ppp/secret")
 
     async def create_pppoe_secret(self, data):
-        return await self.put("ppp/secret", data)
+        return await self._async_req("PUT", "ppp/secret", data)
 
-    async def update_pppoe_secret(self, mikrotik_id, data):
-        return await self.patch(f"ppp/secret/{mikrotik_id}", data)
+    async def update_pppoe_secret(self, mt_id, data):
+        return await self._async_req("PATCH", f"ppp/secret/{mt_id}", data)
 
-    async def delete_pppoe_secret(self, mikrotik_id):
-        return await self.delete(f"ppp/secret/{mikrotik_id}")
+    async def delete_pppoe_secret(self, mt_id):
+        return await self._async_req("DELETE", f"ppp/secret/{mt_id}")
 
     async def list_pppoe_active(self):
-        return await self.get("ppp/active")
+        return await self._async_req("GET", "ppp/active")
 
-    # --- Hotspot Users ---
     async def list_hotspot_users(self):
-        return await self.get("ip/hotspot/user")
-
-    async def get_hotspot_user(self, mikrotik_id):
-        return await self.get(f"ip/hotspot/user/{mikrotik_id}")
+        return await self._async_req("GET", "ip/hotspot/user")
 
     async def create_hotspot_user(self, data):
-        return await self.put("ip/hotspot/user", data)
+        return await self._async_req("PUT", "ip/hotspot/user", data)
 
-    async def update_hotspot_user(self, mikrotik_id, data):
-        return await self.patch(f"ip/hotspot/user/{mikrotik_id}", data)
+    async def update_hotspot_user(self, mt_id, data):
+        return await self._async_req("PATCH", f"ip/hotspot/user/{mt_id}", data)
 
-    async def delete_hotspot_user(self, mikrotik_id):
-        return await self.delete(f"ip/hotspot/user/{mikrotik_id}")
+    async def delete_hotspot_user(self, mt_id):
+        return await self._async_req("DELETE", f"ip/hotspot/user/{mt_id}")
 
     async def list_hotspot_active(self):
-        return await self.get("ip/hotspot/active")
-
-    # --- Interfaces ---
-    async def list_interfaces(self):
-        return await self.get("interface")
-
-    # --- System ---
-    async def get_system_resource(self):
-        return await self.get("system/resource")
-
-    async def get_system_identity(self):
-        return await self.get("system/identity")
+        return await self._async_req("GET", "ip/hotspot/active")
 
 
-def get_api_client(device: dict) -> MikroTikAPI:
-    """Create a MikroTikAPI client from a device document."""
-    return MikroTikAPI(
-        host=device["ip_address"],
-        username=device.get("api_username", "admin"),
-        password=device.get("api_password", ""),
-        port=device.get("api_port", 443),
-        use_ssl=device.get("api_ssl", True),
-    )
+# ═══════════════════════════════════════════════════════════
+# RouterOS 6.x+ MikroTik API Protocol (port 8728/8729)
+# ═══════════════════════════════════════════════════════════
+class MikroTikRouterAPI(MikroTikBase):
+    def __init__(self, host, username, password, port=8728, use_ssl=False, plaintext_login=True):
+        self.host = host
+        self.username = username
+        self.password = password
+        self.port = port
+        self.use_ssl = use_ssl
+        self.plaintext_login = plaintext_login
+
+    def _get_connection(self):
+        """Create a new connection to the router."""
+        try:
+            pool = routeros_api.RouterOsApiPool(
+                host=self.host,
+                username=self.username,
+                password=self.password,
+                port=self.port,
+                use_ssl=self.use_ssl,
+                ssl_verify=False,
+                plaintext_login=self.plaintext_login,
+            )
+            return pool
+        except Exception as e:
+            raise Exception(f"Cannot connect to MikroTik API at {self.host}:{self.port} - {e}")
+
+    def _execute(self, callback):
+        """Execute a callback with a connection, ensuring cleanup."""
+        pool = self._get_connection()
+        try:
+            api = pool.get_api()
+            result = callback(api)
+            return result
+        finally:
+            try:
+                pool.disconnect()
+            except Exception:
+                pass
+
+    def _list_resource(self, path):
+        def cb(api):
+            resource = api.get_resource(path)
+            return resource.get()
+        return self._execute(cb)
+
+    def _add_resource(self, path, data):
+        def cb(api):
+            resource = api.get_resource(path)
+            # routeros_api uses keyword arguments
+            resource.add(**data)
+            return {"success": True}
+        return self._execute(cb)
+
+    def _set_resource(self, path, mt_id, data):
+        def cb(api):
+            resource = api.get_resource(path)
+            resource.set(id=mt_id, **data)
+            return {"success": True}
+        return self._execute(cb)
+
+    def _remove_resource(self, path, mt_id):
+        def cb(api):
+            resource = api.get_resource(path)
+            resource.remove(id=mt_id)
+            return {"success": True}
+        return self._execute(cb)
+
+    # Normalize RouterOS 6 API response to match REST API format
+    def _normalize_items(self, items):
+        """RouterOS API returns list of dicts with 'id' key. Normalize to match REST format."""
+        result = []
+        for item in items:
+            normalized = {}
+            for k, v in item.items():
+                normalized[k] = v
+            # Ensure .id field exists (RouterOS API uses 'id')
+            if "id" in normalized and ".id" not in normalized:
+                normalized[".id"] = normalized["id"]
+            result.append(normalized)
+        return result
+
+    async def test_connection(self):
+        try:
+            def cb(api):
+                resource = api.get_resource("/system/identity")
+                return resource.get()
+            result = await asyncio.to_thread(self._execute, cb)
+            name = result[0].get("name", "") if result else ""
+            return {"success": True, "identity": name, "mode": "API Protocol (RouterOS 6+)"}
+        except Exception as e:
+            return {"success": False, "error": str(e), "mode": "API Protocol (RouterOS 6+)"}
+
+    # ── PPPoE ──
+    async def list_pppoe_secrets(self):
+        items = await asyncio.to_thread(self._list_resource, "/ppp/secret")
+        return self._normalize_items(items)
+
+    async def create_pppoe_secret(self, data):
+        return await asyncio.to_thread(self._add_resource, "/ppp/secret", data)
+
+    async def update_pppoe_secret(self, mt_id, data):
+        return await asyncio.to_thread(self._set_resource, "/ppp/secret", mt_id, data)
+
+    async def delete_pppoe_secret(self, mt_id):
+        return await asyncio.to_thread(self._remove_resource, "/ppp/secret", mt_id)
+
+    async def list_pppoe_active(self):
+        items = await asyncio.to_thread(self._list_resource, "/ppp/active")
+        return self._normalize_items(items)
+
+    # ── Hotspot ──
+    async def list_hotspot_users(self):
+        items = await asyncio.to_thread(self._list_resource, "/ip/hotspot/user")
+        return self._normalize_items(items)
+
+    async def create_hotspot_user(self, data):
+        return await asyncio.to_thread(self._add_resource, "/ip/hotspot/user", data)
+
+    async def update_hotspot_user(self, mt_id, data):
+        return await asyncio.to_thread(self._set_resource, "/ip/hotspot/user", mt_id, data)
+
+    async def delete_hotspot_user(self, mt_id):
+        return await asyncio.to_thread(self._remove_resource, "/ip/hotspot/user", mt_id)
+
+    async def list_hotspot_active(self):
+        items = await asyncio.to_thread(self._list_resource, "/ip/hotspot/active")
+        return self._normalize_items(items)
+
+
+# ═══════════════════════════════════════════════════════════
+# Factory function
+# ═══════════════════════════════════════════════════════════
+def get_api_client(device: dict) -> MikroTikBase:
+    """Create the appropriate MikroTik API client based on device config."""
+    mode = device.get("api_mode", "rest")
+
+    if mode == "api":
+        # RouterOS 6+ API protocol
+        return MikroTikRouterAPI(
+            host=device["ip_address"],
+            username=device.get("api_username", "admin"),
+            password=device.get("api_password", ""),
+            port=device.get("api_port", 8728),
+            use_ssl=device.get("api_ssl", False),
+            plaintext_login=device.get("api_plaintext_login", True),
+        )
+    else:
+        # RouterOS 7+ REST API
+        return MikroTikRestAPI(
+            host=device["ip_address"],
+            username=device.get("api_username", "admin"),
+            password=device.get("api_password", ""),
+            port=device.get("api_port", 443),
+            use_ssl=device.get("api_ssl", True),
+        )

@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 import jwt
 from passlib.context import CryptContext
 import snmp_service
-from mikrotik_api import MikroTikAPI, get_api_client
+from mikrotik_api import get_api_client
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -53,10 +53,12 @@ class DeviceCreate(BaseModel):
     ip_address: str
     snmp_community: str = "public"
     snmp_port: int = 161
+    api_mode: str = "rest"  # "rest" (RouterOS 7+) or "api" (RouterOS 6+)
     api_username: str = "admin"
     api_password: str = ""
     api_port: int = 443
     api_ssl: bool = True
+    api_plaintext_login: bool = True
     description: str = ""
 
 class DeviceUpdate(BaseModel):
@@ -64,10 +66,12 @@ class DeviceUpdate(BaseModel):
     ip_address: Optional[str] = None
     snmp_community: Optional[str] = None
     snmp_port: Optional[int] = None
+    api_mode: Optional[str] = None
     api_username: Optional[str] = None
     api_password: Optional[str] = None
     api_port: Optional[int] = None
     api_ssl: Optional[bool] = None
+    api_plaintext_login: Optional[bool] = None
     description: Optional[str] = None
 
 class PPPoEUserCreate(BaseModel):
@@ -311,7 +315,7 @@ async def trigger_poll(device_id: str, user=Depends(get_current_user)):
 async def test_new(data: DeviceCreate, user=Depends(get_current_user)):
     snmp_r = await snmp_service.test_connection(data.ip_address, data.snmp_port, data.snmp_community)
     ping_r = await snmp_service.ping_host(data.ip_address)
-    mt = MikroTikAPI(data.ip_address, data.api_username, data.api_password, data.api_port, data.api_ssl)
+    mt = get_api_client(data.model_dump())
     api_r = await mt.test_connection()
     return {"snmp": snmp_r, "ping": ping_r, "api": api_r}
 
