@@ -13,6 +13,10 @@ import SettingsPage from "@/pages/SettingsPage";
 import NotificationsPage from "@/pages/NotificationsPage";
 import BackupsPage from "@/pages/BackupsPage";
 import SyslogPage from "@/pages/SyslogPage";
+import BGPPage from "@/pages/BGPPage";
+import RoutingPage from "@/pages/RoutingPage";
+import ConnectionsPage from "@/pages/ConnectionsPage";
+import FirewallPage from "@/pages/FirewallPage";
 import Layout from "@/components/Layout";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -106,6 +110,10 @@ function App() {
             <Route path="backups" element={<ProtectedRoute allowedRoles={["administrator"]}><BackupsPage /></ProtectedRoute>} />
             <Route path="syslog" element={<ProtectedRoute allowedRoles={["administrator"]}><SyslogPage /></ProtectedRoute>} />
             <Route path="admin" element={<ProtectedRoute allowedRoles={["administrator"]}><AdminPage /></ProtectedRoute>} />
+            <Route path="bgp" element={<BGPPage />} />
+            <Route path="routing" element={<RoutingPage />} />
+            <Route path="connections" element={<ConnectionsPage />} />
+            <Route path="firewall" element={<FirewallPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>

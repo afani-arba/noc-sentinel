@@ -2,7 +2,8 @@ import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/App";
 import {
-  LayoutDashboard, Users, Wifi, FileText, Server, Shield, LogOut, Menu, X, ChevronLeft, Settings, Bell, HardDrive, Terminal
+  LayoutDashboard, Users, Wifi, FileText, Server, Shield, LogOut, Menu, X, ChevronLeft, Settings, Bell, HardDrive, Terminal,
+  GitBranch, Route, Cable, ShieldAlert
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,6 +16,12 @@ const navItems = [
   { to: "/hotspot", icon: Wifi, label: "Hotspot Users" },
   { to: "/reports", icon: FileText, label: "Reports" },
   { to: "/devices", icon: Server, label: "Devices" },
+  { separator: true, label: "Routing & Security" },
+  { to: "/bgp", icon: GitBranch, label: "BGP Peers" },
+  { to: "/routing", icon: Route, label: "OSPF / Routes" },
+  { to: "/connections", icon: Cable, label: "Active Connections" },
+  { to: "/firewall", icon: ShieldAlert, label: "Firewall Rules" },
+  { separator: true, label: "Admin", adminOnly: true },
   { to: "/notifications", icon: Bell, label: "Notifikasi", adminOnly: true },
   { to: "/backups", icon: HardDrive, label: "Backup Config", adminOnly: true },
   { to: "/syslog", icon: Terminal, label: "Syslog", adminOnly: true },
@@ -34,7 +41,7 @@ export default function Layout() {
   };
 
   const filteredNav = navItems.filter(
-    (item) => !item.adminOnly || user?.role === "administrator"
+    (item) => item.separator ? (!item.adminOnly || user?.role === "administrator") : (!item.adminOnly || user?.role === "administrator")
   );
 
   const SidebarContent = ({ prefix = "" }) => (
@@ -52,25 +59,37 @@ export default function Layout() {
       </div>
 
       <nav className="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
-        {filteredNav.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.end}
-            onClick={() => setMobileOpen(false)}
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-sm text-sm transition-all duration-200 group ${
-                isActive
-                  ? "bg-primary/10 text-primary border-l-2 border-primary ml-0"
-                  : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
-              }`
-            }
-            data-testid={`${prefix}nav-${item.to === "/" ? "dashboard" : item.to.slice(1)}`}
-          >
-            <item.icon className="w-4 h-4 flex-shrink-0" />
-            {!collapsed && <span>{item.label}</span>}
-          </NavLink>
-        ))}
+        {filteredNav.map((item, idx) => {
+          if (item.separator) {
+            return (
+              <div key={`sep-${idx}`} className="px-3 pt-3 pb-1">
+                {!collapsed && (
+                  <p className="text-[9px] text-muted-foreground/50 uppercase tracking-widest font-semibold">{item.label}</p>
+                )}
+                {collapsed && <div className="border-t border-border/30 my-1" />}
+              </div>
+            );
+          }
+          return (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              onClick={() => setMobileOpen(false)}
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3 py-2.5 rounded-sm text-sm transition-all duration-200 group ${
+                  isActive
+                    ? "bg-primary/10 text-primary border-l-2 border-primary ml-0"
+                    : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+                }`
+              }
+              data-testid={`${prefix}nav-${item.to === "/" ? "dashboard" : item.to.slice(1)}`}
+            >
+              <item.icon className="w-4 h-4 flex-shrink-0" />
+              {!collapsed && <span>{item.label}</span>}
+            </NavLink>
+          );
+        })}
       </nav>
 
       <div className="p-3 border-t border-border/50">

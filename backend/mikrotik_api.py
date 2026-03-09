@@ -116,6 +116,67 @@ class MikroTikRestAPI(MikroTikBase):
     async def list_hotspot_active(self):
         return await self._async_req("GET", "ip/hotspot/active")
 
+    # ── BGP ──
+    async def list_bgp_peers(self):
+        try:
+            return await self._async_req("GET", "routing/bgp/connection")
+        except Exception:
+            return await self._async_req("GET", "routing/bgp/peer")
+
+    async def list_bgp_sessions(self):
+        try:
+            return await self._async_req("GET", "routing/bgp/session")
+        except Exception:
+            return []
+
+    # ── OSPF ──
+    async def list_ospf_neighbors(self):
+        try:
+            return await self._async_req("GET", "routing/ospf/neighbor")
+        except Exception:
+            return []
+
+    async def list_ospf_instances(self):
+        try:
+            return await self._async_req("GET", "routing/ospf/instance")
+        except Exception:
+            return []
+
+    # ── IP Routes ──
+    async def list_ip_routes(self, limit: int = 200):
+        try:
+            routes = await self._async_req("GET", "ip/route")
+            return routes[:limit] if isinstance(routes, list) else []
+        except Exception:
+            return []
+
+    # ── Active Connections ──
+    async def list_connections(self, limit: int = 500):
+        try:
+            conns = await self._async_req("GET", "ip/firewall/connection")
+            return conns[:limit] if isinstance(conns, list) else []
+        except Exception:
+            return []
+
+    # ── Firewall ──
+    async def list_firewall_filter(self):
+        try:
+            return await self._async_req("GET", "ip/firewall/filter")
+        except Exception:
+            return []
+
+    async def list_firewall_nat(self):
+        try:
+            return await self._async_req("GET", "ip/firewall/nat")
+        except Exception:
+            return []
+
+    async def list_firewall_mangle(self):
+        try:
+            return await self._async_req("GET", "ip/firewall/mangle")
+        except Exception:
+            return []
+
 
 # ═══════════════════════════════════════════════════════════
 # RouterOS 6.x+ MikroTik API Protocol (port 8728/8729)
@@ -246,6 +307,70 @@ class MikroTikRouterAPI(MikroTikBase):
     async def list_hotspot_active(self):
         items = await asyncio.to_thread(self._list_resource, "/ip/hotspot/active")
         return self._normalize_items(items)
+
+    # ── BGP ──
+    async def list_bgp_peers(self):
+        try:
+            items = await asyncio.to_thread(self._list_resource, "/routing/bgp/peer")
+            return self._normalize_items(items)
+        except Exception:
+            return []
+
+    async def list_bgp_sessions(self):
+        return []  # RouterOS 6 doesn't have separate sessions
+
+    # ── OSPF ──
+    async def list_ospf_neighbors(self):
+        try:
+            items = await asyncio.to_thread(self._list_resource, "/routing/ospf/neighbor")
+            return self._normalize_items(items)
+        except Exception:
+            return []
+
+    async def list_ospf_instances(self):
+        try:
+            items = await asyncio.to_thread(self._list_resource, "/routing/ospf/instance")
+            return self._normalize_items(items)
+        except Exception:
+            return []
+
+    # ── IP Routes ──
+    async def list_ip_routes(self, limit: int = 200):
+        try:
+            items = await asyncio.to_thread(self._list_resource, "/ip/route")
+            return self._normalize_items(items)[:limit]
+        except Exception:
+            return []
+
+    # ── Active Connections ──
+    async def list_connections(self, limit: int = 500):
+        try:
+            items = await asyncio.to_thread(self._list_resource, "/ip/firewall/connection")
+            return self._normalize_items(items)[:limit]
+        except Exception:
+            return []
+
+    # ── Firewall ──
+    async def list_firewall_filter(self):
+        try:
+            items = await asyncio.to_thread(self._list_resource, "/ip/firewall/filter")
+            return self._normalize_items(items)
+        except Exception:
+            return []
+
+    async def list_firewall_nat(self):
+        try:
+            items = await asyncio.to_thread(self._list_resource, "/ip/firewall/nat")
+            return self._normalize_items(items)
+        except Exception:
+            return []
+
+    async def list_firewall_mangle(self):
+        try:
+            items = await asyncio.to_thread(self._list_resource, "/ip/firewall/mangle")
+            return self._normalize_items(items)
+        except Exception:
+            return []
 
 
 # ═══════════════════════════════════════════════════════════
