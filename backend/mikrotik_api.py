@@ -38,7 +38,10 @@ class MikroTikRestAPI(MikroTikBase):
         self.base_url = f"{scheme}://{host}:{port}/rest"
         self.auth = (username, password)
         self.verify = False
-        self.timeout = 10
+        self.timeout = 30  # Increased timeout to 30 seconds
+        self.host = host
+        self.port = port
+        self.use_ssl = use_ssl
 
     def _request(self, method, path, data=None):
         url = f"{self.base_url}/{path}"
@@ -56,14 +59,20 @@ class MikroTikRestAPI(MikroTikBase):
             return resp.json() if resp.content else {}
         except requests.exceptions.SSLError as e:
             logger.error(f"SSL Error: {e}")
-            raise Exception(f"SSL Error - coba nonaktifkan SSL atau gunakan port HTTP. Detail: {e}")
+            raise Exception(f"SSL Error - pastikan pilih protokol yang benar (HTTP/HTTPS)")
         except requests.exceptions.ConnectionError as e:
-            logger.error(f"Connection Error: {e}")
-            raise Exception(f"Cannot connect to REST API at {url} - pastikan www atau www-ssl service aktif di MikroTik")
+            logger.error(f"Connection Error to {url}: {e}")
+            error_msg = str(e)
+            if "Connection refused" in error_msg:
+                raise Exception(f"Connection refused - pastikan www service aktif di port {self.port} dan tidak ada firewall yang memblokir")
+            elif "No route to host" in error_msg:
+                raise Exception(f"No route to host - periksa IP address dan jaringan")
+            else:
+                raise Exception(f"Tidak dapat terhubung ke {self.host}:{self.port} - pastikan: 1) www service aktif, 2) port {self.port} tidak diblokir firewall, 3) IP server monitoring diizinkan di MikroTik")
         except requests.exceptions.Timeout:
-            raise Exception("Connection timed out - periksa firewall dan pastikan port terbuka")
+            raise Exception(f"Connection timeout ke {self.host}:{self.port} - periksa: 1) Firewall MikroTik, 2) www service address restriction, 3) Koneksi jaringan")
         except Exception as e:
-            if any(k in str(e) for k in ["Authentication", "Bad request", "Cannot connect", "timed out", "SSL Error"]):
+            if any(k in str(e) for k in ["Authentication", "Bad request", "Cannot connect", "timeout", "SSL Error", "Connection refused", "No route"]):
                 raise
             raise Exception(f"REST API error: {e}")
 
