@@ -160,8 +160,8 @@ function InfluxDBSection() {
           </div>
           <div className="p-3 rounded-sm bg-secondary/30 border border-border space-y-1">
             <p className="font-sans text-muted-foreground font-semibold">4. Install Python library (di server):</p>
-            <p className="text-green-400">cd /path/to/noc-sentinel/backend</p>
-            <p className="text-green-400">pip install influxdb-client==3.7.0</p>
+            <p className="text-green-400">cd /path/noc-sentinel/backend</p>
+            <p className="text-green-400">pip install influxdb-client==1.50.0</p>
           </div>
           <p className="font-sans text-[10px] text-muted-foreground/70">Setelah selesai: isi form di atas → Test → Simpan → Restart backend.</p>
         </div>

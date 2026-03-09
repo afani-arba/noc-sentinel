@@ -90,8 +90,7 @@ def write_device_metrics(device_id: str, device_name: str, metrics: dict):
         return
     cfg = _get_config()
     try:
-        from influxdb_client import Point
-        from influxdb_client.domain.write_precision import WritePrecision
+        from influxdb_client import Point, WritePrecision
         now = datetime.now(timezone.utc)
         points = []
 
