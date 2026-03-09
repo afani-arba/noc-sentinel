@@ -42,8 +42,8 @@ export default function Layout() {
         </div>
         {!collapsed && (
           <div className="overflow-hidden">
-            <h1 className="text-base font-bold tracking-tight text-foreground font-['Rajdhani']">NOC-SENTINEL</h1>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">MikroTik Monitor</p>
+            <h1 className="text-base font-bold tracking-tight text-foreground font-['Rajdhani']">ARBA</h1>
+            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">Monitoring System</p>
           </div>
         )}
       </div>

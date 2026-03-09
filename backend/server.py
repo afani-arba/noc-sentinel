@@ -6,7 +6,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os, logging, asyncio, uuid
 from pathlib import Path
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 import jwt
 from passlib.context import CryptContext
@@ -46,11 +46,13 @@ class UserCreate(BaseModel):
     password: str
     full_name: str
     role: str = "user"
+    allowed_devices: List[str] = []  # List of device IDs user can access
 
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     role: Optional[str] = None
     password: Optional[str] = None
+    allowed_devices: Optional[List[str]] = None  # List of device IDs user can access
 
 class DeviceCreate(BaseModel):
     name: str
@@ -264,18 +266,37 @@ async def login(data: UserLogin):
 async def get_me(user=Depends(get_current_user)):
     return {k: v for k, v in user.items() if k != "password"}
 
+# Helper: filter devices based on user access
+def filter_devices_for_user(devices: list, user: dict) -> list:
+    """Filter devices based on user role and allowed_devices."""
+    if user.get("role") == "administrator":
+        return devices  # Admin has full access
+    allowed = user.get("allowed_devices", [])
+    if not allowed:
+        return []  # No devices allowed
+    return [d for d in devices if d.get("id") in allowed]
+
 # ── Devices ──
 SAFE_DEVICE_FIELDS = {"_id": 0, "snmp_community": 0, "api_password": 0, "last_poll_data": 0}
 
 @api_router.get("/devices")
 async def list_devices(user=Depends(get_current_user)):
-    return await db.devices.find({}, SAFE_DEVICE_FIELDS).to_list(100)
+    devs = await db.devices.find({}, SAFE_DEVICE_FIELDS).to_list(100)
+    # Filter based on user permissions
+    devs = filter_devices_for_user(devs, user)
+    return devs
 
 @api_router.get("/devices/full")
 async def list_devices_full(user=Depends(require_admin)):
     devs = await db.devices.find({}, {"_id": 0}).to_list(100)
     for d in devs:
         d.pop("last_poll_data", None)
+    return devs
+
+@api_router.get("/devices/all")
+async def list_all_devices_for_admin(user=Depends(require_admin)):
+    """Get all devices for admin user management form."""
+    devs = await db.devices.find({}, {"_id": 0, "id": 1, "name": 1, "ip_address": 1}).to_list(100)
     return devs
 
 @api_router.post("/devices", status_code=201)
@@ -602,7 +623,8 @@ async def create_admin_user(data: UserCreate, user=Depends(require_admin)):
         raise HTTPException(400, "Invalid role")
     doc = {"id": str(uuid.uuid4()), "username": data.username,
            "password": pwd_context.hash(data.password), "full_name": data.full_name,
-           "role": data.role, "created_at": datetime.now(timezone.utc).isoformat()}
+           "role": data.role, "allowed_devices": data.allowed_devices,
+           "created_at": datetime.now(timezone.utc).isoformat()}
     await db.admin_users.insert_one(doc)
     return {k: v for k, v in doc.items() if k not in ("_id", "password")}
 
@@ -614,6 +636,7 @@ async def update_admin_user(user_id: str, data: UserUpdate, user=Depends(require
         if data.role not in ["administrator","viewer","user"]: raise HTTPException(400,"Invalid role")
         upd["role"] = data.role
     if data.password is not None: upd["password"] = pwd_context.hash(data.password)
+    if data.allowed_devices is not None: upd["allowed_devices"] = data.allowed_devices
     if not upd: raise HTTPException(400, "Nothing to update")
     r = await db.admin_users.update_one({"id": user_id}, {"$set": upd})
     if r.matched_count == 0: raise HTTPException(404, "Not found")

@@ -25,7 +25,13 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get("/devices").then(r => setDevices(r.data)).catch(() => {});
+    api.get("/devices").then(r => {
+      setDevices(r.data);
+      // Set first device as default if available
+      if (r.data.length > 0) {
+        setSelectedDevice(r.data[0].id);
+      }
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {

@@ -51,8 +51,8 @@ export default function LoginPage() {
               <Server className="w-6 h-6 text-primary" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-foreground font-['Rajdhani'] tracking-tight">NOC-SENTINEL</h1>
-              <p className="text-xs text-muted-foreground uppercase tracking-[0.3em]">MikroTik Monitor</p>
+              <h1 className="text-2xl font-bold text-foreground font-['Rajdhani'] tracking-tight">ARBA</h1>
+              <p className="text-xs text-muted-foreground uppercase tracking-[0.3em]">Monitoring System</p>
             </div>
           </div>
 
@@ -94,8 +94,8 @@ export default function LoginPage() {
               <Server className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-foreground font-['Rajdhani']">NOC-SENTINEL</h1>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-[0.2em]">MikroTik Monitor</p>
+              <h1 className="text-xl font-bold text-foreground font-['Rajdhani']">ARBA</h1>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-[0.2em]">Monitoring System</p>
             </div>
           </div>
 
@@ -155,9 +155,16 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          <p className="text-xs text-muted-foreground text-center mt-8">
-            Default credentials: <span className="font-mono text-foreground/70">admin</span> / <span className="font-mono text-foreground/70">admin123</span>
-          </p>
+          <div className="text-center mt-8 space-y-2">
+            <p className="text-xs text-muted-foreground">
+              Default credentials: <span className="font-mono text-foreground/70">admin</span> / <span className="font-mono text-foreground/70">admin123</span>
+            </p>
+            <div className="pt-4 border-t border-border/50">
+              <p className="text-[10px] text-muted-foreground/70">Powered By</p>
+              <p className="text-xs text-muted-foreground font-medium">PT Arsya Barokah Abadi</p>
+              <a href="https://www.arbatraining.com" target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">www.arbatraining.com</a>
+            </div>
+          </div>
         </div>
       </div>
     </div>
