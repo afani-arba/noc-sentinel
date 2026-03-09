@@ -17,7 +17,7 @@ export default function DevicesPage() {
   const [testing, setTesting] = useState("");
   const [form, setForm] = useState({
     name: "", ip_address: "", snmp_community: "public", snmp_port: 161,
-    api_mode: "rest", api_username: "admin", api_password: "", api_port: "", ssl_port: "", api_ssl: true, api_plaintext_login: true, description: "",
+    api_mode: "rest", api_username: "admin", api_password: "", api_port: "", use_https: false, api_ssl: true, api_plaintext_login: true, description: "",
   });
 
   const fetchDevices = useCallback(async () => {
@@ -32,8 +32,7 @@ export default function DevicesPage() {
 
   const openAdd = () => {
     setEditing(null);
-    // Port dikosongkan agar user bebas mengisi nilainya
-    setForm({ name: "", ip_address: "", snmp_community: "public", snmp_port: 161, api_mode: "rest", api_username: "admin", api_password: "", api_port: "", ssl_port: "", api_ssl: true, api_plaintext_login: true, description: "" });
+    setForm({ name: "", ip_address: "", snmp_community: "public", snmp_port: 161, api_mode: "rest", api_username: "admin", api_password: "", api_port: "", use_https: false, api_ssl: true, api_plaintext_login: true, description: "" });
     setDialogOpen(true);
   };
 
@@ -43,7 +42,7 @@ export default function DevicesPage() {
       name: d.name, ip_address: d.ip_address || "", snmp_community: "public", snmp_port: d.snmp_port || 161,
       api_mode: d.api_mode || "rest", api_username: d.api_username || "admin", api_password: "",
       api_port: d.api_port || "",
-      ssl_port: d.ssl_port || "",
+      use_https: d.use_https || false,
       api_ssl: d.api_ssl !== undefined ? d.api_ssl : true,
       api_plaintext_login: d.api_plaintext_login !== undefined ? d.api_plaintext_login : true,
       description: d.description || "",
@@ -54,12 +53,11 @@ export default function DevicesPage() {
   const handleSave = async () => {
     try {
       const apiPort = form.api_port ? parseInt(form.api_port) : null;
-      const sslPort = form.ssl_port ? parseInt(form.ssl_port) : null;
       const data = { 
         ...form, 
         snmp_port: parseInt(form.snmp_port) || 161, 
         api_port: apiPort,
-        ssl_port: sslPort,
+        use_https: form.use_https,
       };
       if (editing) {
         if (!data.api_password) delete data.api_password;
@@ -242,30 +240,53 @@ export default function DevicesPage() {
                 <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">API Password</Label>
                   <Input type="password" value={form.api_password} onChange={e => setForm({...form, api_password:e.target.value})} className="rounded-sm bg-background" placeholder={editing?"(unchanged)":""} data-testid="device-form-api-password" /></div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              
+              {/* Port Configuration */}
+              {form.api_mode === "api" ? (
                 <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">API Port</Label>
+                  <Label className="text-xs text-muted-foreground">API Port (RouterOS 6)</Label>
                   <Input 
                     type="number" 
                     value={form.api_port} 
                     onChange={e => setForm({...form, api_port:e.target.value})} 
                     className="rounded-sm bg-background font-mono text-xs" 
-                    placeholder="Masukkan port API"
+                    placeholder="Port API (default: 8728)"
                     data-testid="device-form-api-port" 
                   />
+                  <p className="text-[10px] text-muted-foreground/70">
+                    Sesuaikan dengan port "api" di IP &gt; Services MikroTik Anda
+                  </p>
                 </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">SSL/WWW Port</Label>
-                  <Input 
-                    type="number" 
-                    value={form.ssl_port || ""} 
-                    onChange={e => setForm({...form, ssl_port: e.target.value})} 
-                    className="rounded-sm bg-background font-mono text-xs" 
-                    placeholder="Masukkan port SSL/WWW"
-                    data-testid="device-form-ssl-port" 
-                  />
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">WWW Port (REST API)</Label>
+                    <Input 
+                      type="number" 
+                      value={form.api_port} 
+                      onChange={e => setForm({...form, api_port:e.target.value})} 
+                      className="rounded-sm bg-background font-mono text-xs" 
+                      placeholder="Port www/www-ssl"
+                      data-testid="device-form-api-port" 
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Protokol</Label>
+                    <Select value={form.use_https ? "https" : "http"} onValueChange={v => setForm({...form, use_https: v === "https"})}>
+                      <SelectTrigger className="rounded-sm bg-background text-xs" data-testid="device-form-protocol">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="http">HTTP (www)</SelectItem>
+                        <SelectItem value="https">HTTPS (www-ssl)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <p className="col-span-2 text-[10px] text-muted-foreground/70">
+                    Sesuaikan dengan port "www" atau "www-ssl" di IP &gt; Services MikroTik Anda
+                  </p>
                 </div>
-              </div>
+              )}
             </div>
             <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Description</Label>
               <Input value={form.description} onChange={e => setForm({...form, description:e.target.value})} className="rounded-sm bg-background" data-testid="device-form-description" /></div>
