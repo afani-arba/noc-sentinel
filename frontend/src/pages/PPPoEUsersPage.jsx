@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import api from "@/lib/api";
 import { useAuth } from "@/App";
-import { Search, Plus, Pencil, Trash2, RefreshCw, Wifi, WifiOff, Server, Eye, EyeOff, ChevronDown, ChevronUp } from "lucide-react";
+import { Search, Plus, Pencil, Trash2, RefreshCw, Wifi, WifiOff, Server, Eye, EyeOff, ChevronDown, ChevronUp, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,12 +10,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 
+const PAGE_SIZE = 50;
+
 function UserCard({ u, isViewer, userRole, onEdit, onDelete }) {
   const [showPwd, setShowPwd] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="bg-card border border-border rounded-sm p-3 hover:border-border/80 transition-all" data-testid={`pppoe-row-${u.name}`}>
+    <div className="bg-card border border-border rounded-sm p-3 hover:border-primary/30 transition-all" data-testid={`pppoe-row-${u.name}`}>
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <div className={`w-2 h-2 rounded-full flex-shrink-0 ${u.is_online ? "bg-green-500 animate-pulse" : "bg-muted-foreground/30"}`} />
@@ -87,6 +89,24 @@ function UserCard({ u, isViewer, userRole, onEdit, onDelete }) {
   );
 }
 
+// Pagination component
+function Pagination({ page, totalPages, onPage }) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex items-center justify-center gap-2 py-2">
+      <Button variant="outline" size="icon" className="h-7 w-7 rounded-sm" disabled={page === 0} onClick={() => onPage(page - 1)}>
+        <ChevronLeft className="w-4 h-4" />
+      </Button>
+      <span className="text-xs text-muted-foreground">
+        Halaman <span className="text-foreground font-mono">{page + 1}</span> / <span className="font-mono">{totalPages}</span>
+      </span>
+      <Button variant="outline" size="icon" className="h-7 w-7 rounded-sm" disabled={page >= totalPages - 1} onClick={() => onPage(page + 1)}>
+        <ChevronRight className="w-4 h-4" />
+      </Button>
+    </div>
+  );
+}
+
 export default function PPPoEUsersPage() {
   const { user } = useAuth();
   const isViewer = user?.role === "viewer";
@@ -100,6 +120,7 @@ export default function PPPoEUsersPage() {
   const [editing, setEditing] = useState(null);
   const [showFormPwd, setShowFormPwd] = useState(false);
   const [form, setForm] = useState({ name: "", password: "", profile: "default", service: "pppoe", comment: "" });
+  const [page, setPage] = useState(0);
 
   useEffect(() => {
     api.get("/devices").then(r => {
@@ -112,6 +133,7 @@ export default function PPPoEUsersPage() {
     if (!selectedDevice) return;
     setLoading(true);
     setError("");
+    setPage(0);
     try {
       const params = { device_id: selectedDevice };
       if (search) params.search = search;
@@ -126,6 +148,9 @@ export default function PPPoEUsersPage() {
   }, [selectedDevice, search]);
 
   useEffect(() => { fetchUsers(); }, [fetchUsers]);
+
+  // Reset page when search changes
+  useEffect(() => { setPage(0); }, [search]);
 
   const openAdd = () => {
     setEditing(null);
@@ -172,9 +197,11 @@ export default function PPPoEUsersPage() {
 
   const currentDev = devices.find(d => d.id === selectedDevice);
   const onlineCount = users.filter(u => u.is_online).length;
+  const totalPages = Math.ceil(users.length / PAGE_SIZE);
+  const pagedUsers = users.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   return (
-    <div className="space-y-4 pb-16" data-testid="pppoe-users-page">
+    <div className="space-y-3 pb-16" data-testid="pppoe-users-page">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
@@ -192,7 +219,7 @@ export default function PPPoEUsersPage() {
       <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
         <div className="space-y-1">
           <label className="text-[10px] text-muted-foreground uppercase tracking-widest">Select Device</label>
-          <Select value={selectedDevice} onValueChange={setSelectedDevice}>
+          <Select value={selectedDevice} onValueChange={v => { setSelectedDevice(v); setPage(0); }}>
             <SelectTrigger className="w-full sm:w-48 rounded-sm bg-card text-xs h-9" data-testid="pppoe-device-select">
               <SelectValue placeholder="Select device..." />
             </SelectTrigger>
@@ -212,7 +239,8 @@ export default function PPPoEUsersPage() {
           <div className="flex gap-2 flex-1">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 rounded-sm bg-card h-9 text-xs" data-testid="pppoe-search-input" />
+              <Input placeholder="Search..." value={search} onChange={e => { setSearch(e.target.value); setPage(0); }}
+                className="pl-9 rounded-sm bg-card h-9 text-xs" data-testid="pppoe-search-input" />
             </div>
             <Button variant="outline" size="icon" onClick={fetchUsers} className="rounded-sm h-9 w-9 flex-shrink-0" data-testid="pppoe-refresh-btn">
               <RefreshCw className="w-4 h-4" />
@@ -227,6 +255,11 @@ export default function PPPoEUsersPage() {
           <span>Total: <span className="text-foreground font-mono">{users.length}</span></span>
           <span className="text-green-500">Online: <span className="font-mono">{onlineCount}</span></span>
           <span className="text-muted-foreground/60">Offline: <span className="font-mono">{users.length - onlineCount}</span></span>
+          {totalPages > 1 && (
+            <span className="text-muted-foreground/60">
+              Tampil: <span className="font-mono">{page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, users.length)}</span>
+            </span>
+          )}
           {currentDev && <span className="ml-auto font-mono text-[10px]">{currentDev.name}</span>}
         </div>
       )}
@@ -244,6 +277,7 @@ export default function PPPoEUsersPage() {
         </div>
       ) : loading ? (
         <div className="bg-card border border-border rounded-sm p-8 text-center">
+          <RefreshCw className="w-6 h-6 mx-auto mb-2 text-muted-foreground animate-spin" />
           <p className="text-sm text-muted-foreground">Connecting to MikroTik...</p>
         </div>
       ) : users.length === 0 ? (
@@ -251,19 +285,21 @@ export default function PPPoEUsersPage() {
           <p className="text-sm text-muted-foreground">No PPPoE users found</p>
         </div>
       ) : (
-        /* Card grid: 1 col mobile, 2 col sm, 3 col lg */
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
-          {users.map(u => (
-            <UserCard
-              key={u[".id"]}
-              u={u}
-              isViewer={isViewer}
-              userRole={user?.role}
-              onEdit={openEdit}
-              onDelete={handleDelete}
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
+            {pagedUsers.map(u => (
+              <UserCard
+                key={u[".id"]}
+                u={u}
+                isViewer={isViewer}
+                userRole={user?.role}
+                onEdit={openEdit}
+                onDelete={handleDelete}
+              />
+            ))}
+          </div>
+          <Pagination page={page} totalPages={totalPages} onPage={setPage} />
+        </>
       )}
 
       {/* Dialog */}
