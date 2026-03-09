@@ -188,9 +188,12 @@ export default function DevicesPage() {
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1"><Shield className="w-3 h-3" /> SNMP Monitoring</p>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">Community String</Label>
-                  <Input value={form.snmp_community} onChange={e => setForm({...form, snmp_community:e.target.value})} className="rounded-sm bg-background font-mono text-xs" data-testid="device-form-snmp-community" /></div>
-                <div className="space-y-1.5"><Label className="text-xs text-muted-foreground">SNMP Port</Label>
-                  <Input type="number" value={form.snmp_port} onChange={e => setForm({...form, snmp_port:e.target.value})} className="rounded-sm bg-background font-mono text-xs" data-testid="device-form-snmp-port" /></div>
+                  <Input value={form.snmp_community} onChange={e => setForm({...form, snmp_community:e.target.value})} className="rounded-sm bg-background font-mono text-xs" placeholder="public" data-testid="device-form-snmp-community" /></div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">SNMP Port</Label>
+                  <Input type="number" value={form.snmp_port} onChange={e => setForm({...form, snmp_port:e.target.value})} className="rounded-sm bg-background font-mono text-xs" placeholder="161 (default)" data-testid="device-form-snmp-port" />
+                  <p className="text-[10px] text-muted-foreground/70">Isi jika port SNMP sudah diubah dari 161</p>
+                </div>
               </div>
             </div>
 
@@ -235,46 +238,62 @@ export default function DevicesPage() {
               {/* Port Configuration */}
               {form.api_mode === "api" ? (
                 <div className="space-y-1.5">
-                  <Label className="text-xs text-muted-foreground">API Port (RouterOS 6)</Label>
+                  <Label className="text-xs text-muted-foreground">
+                    API Port (RouterOS 6)
+                  </Label>
                   <Input 
                     type="number" 
                     value={form.api_port} 
                     onChange={e => setForm({...form, api_port:e.target.value})} 
                     className="rounded-sm bg-background font-mono text-xs" 
-                    placeholder="Port API (default: 8728)"
+                    placeholder={form.api_ssl ? "8729 (SSL, kosong = default)" : "8728 (kosong = default)"}
                     data-testid="device-form-api-port" 
                   />
                   <p className="text-[10px] text-muted-foreground/70">
-                    Sesuaikan dengan port "api" di IP &gt; Services MikroTik Anda
+                    Kosongkan untuk menggunakan port default ({form.api_ssl ? "8729" : "8728"}). Isi jika port sudah diganti di IP › Services MikroTik.
                   </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">WWW Port (REST API)</Label>
-                    <Input 
-                      type="number" 
-                      value={form.api_port} 
-                      onChange={e => setForm({...form, api_port:e.target.value})} 
-                      className="rounded-sm bg-background font-mono text-xs" 
-                      placeholder="Port www/www-ssl"
-                      data-testid="device-form-api-port" 
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs text-muted-foreground">Protokol</Label>
-                    <Select value={form.use_https ? "https" : "http"} onValueChange={v => setForm({...form, use_https: v === "https"})}>
-                      <SelectTrigger className="rounded-sm bg-background text-xs" data-testid="device-form-protocol">
+                  <div className="flex items-center gap-2 pt-1">
+                    <Label className="text-xs text-muted-foreground">SSL/Encrypted</Label>
+                    <Select value={form.api_ssl ? "true" : "false"} onValueChange={v => setForm({...form, api_ssl: v === "true"})}>
+                      <SelectTrigger className="rounded-sm bg-background text-xs h-8 w-32" data-testid="device-form-api-ssl">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="http">HTTP (www)</SelectItem>
-                        <SelectItem value="https">HTTPS (www-ssl)</SelectItem>
+                        <SelectItem value="false">Plain (8728)</SelectItem>
+                        <SelectItem value="true">SSL (8729)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-                  <p className="col-span-2 text-[10px] text-muted-foreground/70">
-                    Sesuaikan dengan port "www" atau "www-ssl" di IP &gt; Services MikroTik Anda
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Protokol</Label>
+                      <Select value={form.use_https ? "https" : "http"} onValueChange={v => setForm({...form, use_https: v === "https"})}>
+                        <SelectTrigger className="rounded-sm bg-background text-xs" data-testid="device-form-protocol">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="http">HTTP (www)</SelectItem>
+                          <SelectItem value="https">HTTPS (www-ssl)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">WWW Port</Label>
+                      <Input 
+                        type="number" 
+                        value={form.api_port} 
+                        onChange={e => setForm({...form, api_port:e.target.value})} 
+                        className="rounded-sm bg-background font-mono text-xs" 
+                        placeholder={form.use_https ? "443 (kosong = default)" : "80 (kosong = default)"}
+                        data-testid="device-form-api-port" 
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground/70">
+                    Kosongkan port untuk menggunakan default ({form.use_https ? "443" : "80"}). Isi jika port {form.use_https ? "www-ssl" : "www"} di IP › Services MikroTik sudah diubah.
                   </p>
                 </div>
               )}

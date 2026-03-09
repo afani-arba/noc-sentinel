@@ -2,7 +2,7 @@ import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/App";
 import {
-  LayoutDashboard, Users, Wifi, FileText, Server, Shield, LogOut, Menu, X, ChevronLeft, Settings
+  LayoutDashboard, Users, Wifi, FileText, Server, Shield, LogOut, Menu, X, ChevronLeft, Settings, Bell, HardDrive, Terminal
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,6 +15,9 @@ const navItems = [
   { to: "/hotspot", icon: Wifi, label: "Hotspot Users" },
   { to: "/reports", icon: FileText, label: "Reports" },
   { to: "/devices", icon: Server, label: "Devices" },
+  { to: "/notifications", icon: Bell, label: "Notifikasi", adminOnly: true },
+  { to: "/backups", icon: HardDrive, label: "Backup Config", adminOnly: true },
+  { to: "/syslog", icon: Terminal, label: "Syslog", adminOnly: true },
   { to: "/settings", icon: Settings, label: "Pengaturan", adminOnly: true },
   { to: "/admin", icon: Shield, label: "Admin", adminOnly: true },
 ];

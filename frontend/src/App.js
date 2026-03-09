@@ -10,6 +10,9 @@ import ReportsPage from "@/pages/ReportsPage";
 import DevicesPage from "@/pages/DevicesPage";
 import AdminPage from "@/pages/AdminPage";
 import SettingsPage from "@/pages/SettingsPage";
+import NotificationsPage from "@/pages/NotificationsPage";
+import BackupsPage from "@/pages/BackupsPage";
+import SyslogPage from "@/pages/SyslogPage";
 import Layout from "@/components/Layout";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -99,6 +102,9 @@ function App() {
             <Route path="reports" element={<ReportsPage />} />
             <Route path="devices" element={<DevicesPage />} />
             <Route path="settings" element={<ProtectedRoute allowedRoles={["administrator"]}><SettingsPage /></ProtectedRoute>} />
+            <Route path="notifications" element={<ProtectedRoute allowedRoles={["administrator"]}><NotificationsPage /></ProtectedRoute>} />
+            <Route path="backups" element={<ProtectedRoute allowedRoles={["administrator"]}><BackupsPage /></ProtectedRoute>} />
+            <Route path="syslog" element={<ProtectedRoute allowedRoles={["administrator"]}><SyslogPage /></ProtectedRoute>} />
             <Route path="admin" element={<ProtectedRoute allowedRoles={["administrator"]}><AdminPage /></ProtectedRoute>} />
           </Route>
           <Route path="*" element={<Navigate to="/" />} />
