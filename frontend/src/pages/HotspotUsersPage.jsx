@@ -213,37 +213,37 @@ export default function HotspotUsersPage() {
       </div>
 
       {/* Controls */}
-      <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
-        <div className="space-y-1">
-          <label className="text-[10px] text-muted-foreground uppercase tracking-widest">Select Device</label>
-          <Select value={selectedDevice} onValueChange={v => { setSelectedDevice(v); setPage(0); }}>
-            <SelectTrigger className="w-full sm:w-48 rounded-sm bg-card text-xs h-9" data-testid="hotspot-device-select">
-              <SelectValue placeholder="Select device..." />
-            </SelectTrigger>
-            <SelectContent>
-              {devices.map(d => (
-                <SelectItem key={d.id} value={d.id}>
-                  <span className="flex items-center gap-2">
-                    <div className={`w-1.5 h-1.5 rounded-full ${d.status === "online" ? "bg-green-500" : "bg-red-500"}`} />
-                    {d.name}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        {selectedDevice && (
-          <div className="flex gap-2 flex-1">
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-col sm:flex-row gap-2">
+          <div className="flex flex-col gap-1 sm:flex-none">
+            <label className="text-[10px] text-muted-foreground uppercase tracking-widest">Select Device</label>
+            <Select value={selectedDevice} onValueChange={v => { setSelectedDevice(v); setPage(0); }}>
+              <SelectTrigger className="w-full sm:w-52 rounded-sm bg-card text-xs h-9" data-testid="hotspot-device-select">
+                <SelectValue placeholder="Select device..." />
+              </SelectTrigger>
+              <SelectContent>
+                {devices.map(d => (
+                  <SelectItem key={d.id} value={d.id}>
+                    <span className="flex items-center gap-2">
+                      <div className={`w-1.5 h-1.5 rounded-full ${d.status === "online" ? "bg-green-500" : "bg-red-500"}`} />
+                      {d.name}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex gap-2 flex-1 sm:self-end">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input placeholder="Search..." value={search} onChange={e => { setSearch(e.target.value); setPage(0); }}
+              <Input placeholder="Cari username..." value={search} onChange={e => { setSearch(e.target.value); setPage(0); }}
                 className="pl-9 rounded-sm bg-card h-9 text-xs" data-testid="hotspot-search-input" />
             </div>
             <Button variant="outline" size="icon" onClick={fetchUsers} className="rounded-sm h-9 w-9 flex-shrink-0" data-testid="hotspot-refresh-btn">
               <RefreshCw className="w-4 h-4" />
             </Button>
           </div>
-        )}
+        </div>
       </div>
 
       {/* Stats bar */}

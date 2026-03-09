@@ -315,16 +315,88 @@ async def get_memory_usage(host, port, community):
     return memory
 
 
-async def ping_host(host, count=3, timeout=2):
-    """Ping to 8.8.8.8 (Google DNS) using TCP to measure internet latency."""
-    return await tcp_ping("8.8.8.8", [53], count=count, timeout=timeout)  # DNS port 53
+async def ping_host(host, count=4, timeout=5):
+    """
+    Real ICMP ping to 8.8.8.8 (Google) and 1.1.1.1 (Cloudflare).
+    Returns the best (lowest latency) result from both targets.
+    host parameter is kept for API compatibility but not used for ping targets.
+    """
+    results = await asyncio.gather(
+        _icmp_ping("8.8.8.8", count=count, timeout=timeout),
+        _icmp_ping("1.1.1.1", count=count, timeout=timeout),
+        return_exceptions=True
+    )
+
+    # Filter valid results
+    valid = [r for r in results if isinstance(r, dict) and r.get("reachable")]
+
+    if not valid:
+        # Both failed — return unreachable
+        return {"reachable": False, "min": 0, "avg": 0, "max": 0, "jitter": 0, "loss": 100}
+
+    # Return the result with lowest average ping (best internet path)
+    best = min(valid, key=lambda r: r.get("avg", 9999))
+    return best
+
+
+async def _icmp_ping(target: str, count: int = 4, timeout: int = 5) -> dict:
+    """
+    Real ICMP ping using system ping command.
+    Works on Linux (server) with standard ping binary.
+    """
+    import time
+    import re
+
+    try:
+        # Linux ping: -c count, -W timeout per packet (seconds), -q quiet summary
+        proc = await asyncio.wait_for(
+            asyncio.create_subprocess_exec(
+                "ping", "-c", str(count), "-W", str(timeout), "-q", target,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            ),
+            timeout=timeout * count + 5
+        )
+        stdout, _ = await proc.communicate()
+        output = stdout.decode("utf-8", errors="ignore")
+
+        # Parse packet loss
+        loss = 100
+        loss_match = re.search(r"(\d+)%\s+packet\s+loss", output)
+        if loss_match:
+            loss = int(loss_match.group(1))
+
+        # Parse rtt min/avg/max/mdev line
+        # Example: rtt min/avg/max/mdev = 1.234/2.567/3.891/1.023 ms
+        rtt_match = re.search(r"rtt\s+min/avg/max/mdev\s*=\s*([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)", output)
+        if rtt_match:
+            min_ms = float(rtt_match.group(1))
+            avg_ms = float(rtt_match.group(2))
+            max_ms = float(rtt_match.group(3))
+            mdev_ms = float(rtt_match.group(4))  # mdev = jitter
+            return {
+                "reachable": loss < 100,
+                "min": round(min_ms, 2),
+                "avg": round(avg_ms, 2),
+                "max": round(max_ms, 2),
+                "jitter": round(mdev_ms, 2),
+                "loss": loss,
+                "target": target,
+            }
+
+        # If no rtt line, all packets lost
+        return {"reachable": False, "min": 0, "avg": 0, "max": 0, "jitter": 0, "loss": 100, "target": target}
+
+    except Exception as e:
+        logger.debug(f"ICMP ping to {target} failed: {e}")
+        return {"reachable": False, "min": 0, "avg": 0, "max": 0, "jitter": 0, "loss": 100, "target": target}
 
 
 async def tcp_ping(host, ports, count=3, timeout=2):
-    """Measure latency using TCP connection time."""
+    """Fallback TCP ping — kept for compatibility but not used for dashboard metrics."""
     import time
     latencies = []
-    
+
     for _ in range(count):
         for port in ports:
             try:
@@ -333,19 +405,18 @@ async def tcp_ping(host, ports, count=3, timeout=2):
                     asyncio.open_connection(host, port),
                     timeout=timeout
                 )
-                latency = (time.time() - start) * 1000  # Convert to ms
+                latency = (time.time() - start) * 1000
                 latencies.append(latency)
                 writer.close()
                 await writer.wait_closed()
-                break  # Success on this port, no need to try others
+                break
             except Exception:
-                continue  # Try next port
-    
+                continue
+
     if latencies:
         avg = sum(latencies) / len(latencies)
         min_lat = min(latencies)
         max_lat = max(latencies)
-        # Calculate jitter as average deviation from mean
         jitter = sum(abs(l - avg) for l in latencies) / len(latencies) if len(latencies) > 1 else 0
         return {
             "reachable": True,
@@ -355,8 +426,9 @@ async def tcp_ping(host, ports, count=3, timeout=2):
             "jitter": round(jitter, 2),
             "loss": round((count - len(latencies)) / count * 100)
         }
-    
+
     return {"reachable": False, "min": 0, "avg": 0, "max": 0, "jitter": 0, "loss": 100}
+
 
 
 async def poll_device(host, port, community):
