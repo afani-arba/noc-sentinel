@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback } from "react";
 import api from "@/lib/api";
 import {
   Server, ArrowDown, ArrowUp, Cpu, HardDrive, Activity, Monitor, Network,
-  AlertTriangle, AlertCircle, Info, CheckCircle2, RefreshCw, Thermometer, Zap, Battery
+  AlertTriangle, AlertCircle, Info, CheckCircle2, RefreshCw, Thermometer, Zap, Battery, Wifi
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line, Legend
@@ -23,6 +24,14 @@ export default function DashboardPage() {
   const [interfaces, setInterfaces] = useState(["all"]);
   const [selectedInterface, setSelectedInterface] = useState("all");
   const [loading, setLoading] = useState(true);
+  // Traffic history filter
+  const [trafficRange, setTrafficRange] = useState("24h");
+  const [dateFilter, setDateFilter] = useState("");
+  const [trafficData, setTrafficData] = useState(null); // null = use stats.traffic_data
+  const [loadingTraffic, setLoadingTraffic] = useState(false);
+  // WAN detect
+  const [wanDetecting, setWanDetecting] = useState(false);
+  const [wanInterface, setWanInterface] = useState("");
 
   useEffect(() => {
     api.get("/devices").then(r => {
@@ -48,9 +57,6 @@ export default function DashboardPage() {
       const r = await api.get("/dashboard/stats", { params });
       const data = r.data;
 
-      // Selalu merge REST API health data dengan SNMP untuk device spesifik.
-      // SNMP hanya punya board_temp/cpu_temp/voltage dari private OIDs,
-      // sementara REST API punya sfp_temp, switch_temp, fan speeds, PSU states.
       if (selectedDevice !== "all" && data.system_health) {
         try {
           const hr = await api.get(`/devices/${selectedDevice}/system-health`);
@@ -59,14 +65,12 @@ export default function DashboardPage() {
             const h = data.system_health;
             data.system_health = {
               ...h,
-              // Prefer REST API values, fallback ke SNMP jika REST API = 0
               cpu_temp: rd.cpu_temp || h.cpu_temp || 0,
               board_temp: rd.board_temp || h.board_temp || 0,
               sfp_temp: rd.sfp_temp || 0,
               switch_temp: rd.switch_temp || 0,
               voltage: rd.voltage || h.voltage || 0,
               power: rd.power || h.power || 0,
-              // Sensor ino hanya ada di REST API
               fans: rd.fans || {},
               fan_state: rd.fan_state || "",
               psu: rd.psu || {},
@@ -74,7 +78,6 @@ export default function DashboardPage() {
             };
           }
         } catch (_) {
-          // REST API tidak bisa dijangkau (SSL error dll), pakai SNMP saja
           const h = data.system_health;
           data.system_health = { ...h, fans: {}, fan_state: "", psu: {}, extra_temps: {} };
         }
@@ -85,16 +88,48 @@ export default function DashboardPage() {
     setLoading(false);
   }, [selectedDevice, selectedInterface]);
 
+  const fetchTrafficHistory = useCallback(async () => {
+    if (trafficRange === "24h" && !dateFilter) { setTrafficData(null); return; }
+    setLoadingTraffic(true);
+    try {
+      const params = { range: trafficRange };
+      if (selectedDevice !== "all") params.device_id = selectedDevice;
+      if (selectedInterface !== "all") params.interface = selectedInterface;
+      if (dateFilter) params.date = dateFilter;
+      const r = await api.get("/dashboard/traffic-history", { params });
+      setTrafficData(r.data);
+    } catch { setTrafficData(null); }
+    setLoadingTraffic(false);
+  }, [trafficRange, dateFilter, selectedDevice, selectedInterface]);
+
+  const detectWan = async () => {
+    if (!selectedDevice || selectedDevice === "all") return;
+    setWanDetecting(true);
+    try {
+      const r = await api.get("/dashboard/wan-interface", { params: { device_id: selectedDevice } });
+      if (r.data.wan_interface) {
+        setWanInterface(r.data.wan_interface);
+        setSelectedInterface(r.data.wan_interface);
+      } else {
+        setWanInterface("");
+        alert("Tidak ada interface yang bisa mencapai 8.8.8.8");
+      }
+    } catch { /* ignore */ }
+    setWanDetecting(false);
+  };
+
   useEffect(() => {
     fetchStats();
     const iv = setInterval(fetchStats, 30000);
     return () => clearInterval(iv);
   }, [fetchStats]);
 
+  useEffect(() => { fetchTrafficHistory(); }, [fetchTrafficHistory]);
+
   if (loading && !stats) return <div className="flex items-center justify-center h-64" data-testid="dashboard-loading"><span className="text-muted-foreground text-sm">Loading dashboard...</span></div>;
   if (!stats) return null;
 
-  const td = stats.traffic_data || [];
+  const td = trafficData ?? (stats?.traffic_data || []);
   // Defensive aliases — prevent TypeError when API returns partial data
   const health = stats.system_health || {};
   const devStat = stats.devices || { online: 0, total: 0 };
@@ -128,13 +163,22 @@ export default function DashboardPage() {
             </Select>
           </div>
           <div className="space-y-1">
-            <label className="text-[10px] text-muted-foreground uppercase tracking-widest flex items-center gap-1"><Network className="w-3 h-3" /> Interface</label>
-            <Select value={selectedInterface} onValueChange={setSelectedInterface}>
-              <SelectTrigger className="w-full sm:w-36 rounded-sm bg-card text-xs h-9" data-testid="dashboard-interface-select"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {interfaces.map(i => <SelectItem key={i} value={i}><span className="font-mono text-xs">{i === "all" ? "All Interfaces" : i}</span></SelectItem>)}
-              </SelectContent>
-            </Select>
+            <label className="text-[10px] text-muted-foreground uppercase tracking-widest flex items-center gap-1"><Network className="w-3 h-3" /> Interface
+              {wanInterface && <Badge variant="outline" className="rounded-sm text-[10px] ml-1 text-cyan-400 border-cyan-500/30">WAN: {wanInterface}</Badge>}
+            </label>
+            <div className="flex gap-1">
+              <Select value={selectedInterface} onValueChange={setSelectedInterface}>
+                <SelectTrigger className="w-full sm:w-32 rounded-sm bg-card text-xs h-9" data-testid="dashboard-interface-select"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {interfaces.map(i => <SelectItem key={i} value={i}><span className="font-mono text-xs">{i === "all" ? "All Interfaces" : i}</span></SelectItem>)}
+                </SelectContent>
+              </Select>
+              {selectedDevice !== "all" && (
+                <Button variant="outline" size="icon" className="h-9 w-9 rounded-sm flex-shrink-0" onClick={detectWan} disabled={wanDetecting} title="Detect WAN interface via ping 8.8.8.8">
+                  {wanDetecting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Wifi className="w-3.5 h-3.5 text-cyan-500" />}
+                </Button>
+              )}
+            </div>
           </div>
           <Button variant="outline" size="icon" className="h-9 w-9 rounded-sm col-span-2 sm:col-span-1 justify-self-end" onClick={fetchStats} data-testid="dashboard-refresh-btn"><RefreshCw className="w-4 h-4" /></Button>
         </div>
@@ -176,7 +220,25 @@ export default function DashboardPage() {
         <>
           {/* Traffic Chart */}
           <div className="bg-card border border-border rounded-sm p-3 sm:p-5" data-testid="traffic-chart">
-            <h3 className="text-base sm:text-lg font-semibold font-['Rajdhani'] mb-3 sm:mb-4">Traffic History</h3>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-3 sm:mb-4 gap-2">
+              <h3 className="text-base sm:text-lg font-semibold font-['Rajdhani']">Traffic History</h3>
+              {/* Time range filter */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {[{v:"1h",l:"1J"},{v:"12h",l:"12J"},{v:"24h",l:"24J"},{v:"week",l:"Minggu"},{v:"month",l:"Bulan"}].map(r => (
+                  <button key={r.v} onClick={() => { setTrafficRange(r.v); setDateFilter(""); }}
+                    className={`text-[10px] px-2 py-1 rounded-sm border transition-colors ${
+                      trafficRange === r.v && !dateFilter ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:border-primary/50"
+                    }`}>{r.l}</button>
+                ))}
+                <input
+                  type="date"
+                  value={dateFilter}
+                  onChange={e => { setDateFilter(e.target.value); if (e.target.value) setTrafficRange("24h"); }}
+                  className="text-[10px] h-7 px-2 rounded-sm border border-border bg-card text-muted-foreground focus:outline-none focus:border-primary"
+                />
+                {loadingTraffic && <RefreshCw className="w-3 h-3 animate-spin text-muted-foreground" />}
+              </div>
+            </div>
             <div className="h-48 sm:h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={td}>

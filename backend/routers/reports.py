@@ -22,10 +22,11 @@ class ReportRequest(BaseModel):
 @router.post("/generate")
 async def generate_report(data: ReportRequest, user=Depends(get_current_user)):
     db = get_db()
-    now = datetime.now(timezone.utc)
+    now = datetime.now()  # local server time (avoid UTC "yesterday" bug for WIB users)
+    now_utc = datetime.now(timezone.utc)
     hours_map = {"daily": 24, "weekly": 168, "monthly": 720}
     h = hours_map.get(data.period, 24)
-    start = now - timedelta(hours=h)
+    start = now_utc - timedelta(hours=h)   # query DB dengan UTC
     label_map = {"daily": "Laporan Monitoring Harian", "weekly": "Laporan Monitoring Mingguan", "monthly": "Laporan Monitoring Bulanan"}
     label = label_map.get(data.period, "Laporan Monitoring")
 

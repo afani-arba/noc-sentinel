@@ -305,3 +305,124 @@ async def dashboard_interfaces(device_id: str = "", user=Depends(get_current_use
         return ["all"]
     interfaces = [i["name"] for i in device["last_poll_data"].get("interfaces", []) if i.get("name")]
     return ["all"] + interfaces
+
+
+@router.get("/dashboard/wan-interface")
+async def detect_wan_interface(device_id: str, user=Depends(get_current_user)):
+    """
+    Detect WAN interface by pinging 8.8.8.8 from each interface on MikroTik.
+    Returns the interface name that can reach internet.
+    """
+    db = get_db()
+    device = await db.devices.find_one({"id": device_id}, {"_id": 0})
+    if not device:
+        raise HTTPException(404, "Device not found")
+    if device.get("status") != "online":
+        raise HTTPException(400, "Device is offline")
+
+    # Get interface list from stored poll data
+    iface_list = []
+    if device.get("last_poll_data"):
+        iface_list = [
+            i["name"] for i in device["last_poll_data"].get("interfaces", [])
+            if i.get("name") and i.get("type") in ("ether", "vlan", "bonding", "bridge", "", None)
+               and not i["name"].startswith("lo")
+        ]
+
+    if not iface_list:
+        return {"wan_interface": None, "tested": []}
+
+    try:
+        mt = get_api_client(device)
+        tested = []
+        wan_iface = None
+
+        for iface in iface_list[:10]:  # limit to 10 interfaces to avoid timeout
+            try:
+                result = await asyncio.to_thread(
+                    mt.post, "/tool/ping",
+                    {"address": "8.8.8.8", "interface": iface, "count": "2", "interval": "0.5s"}
+                )
+                ping_results = result if isinstance(result, list) else []
+                received = sum(1 for r in ping_results if r.get("received", "0") != "0")
+                tested.append({"interface": iface, "reachable": received > 0})
+                if received > 0 and not wan_iface:
+                    wan_iface = iface
+                    break  # found WAN interface, stop testing
+            except Exception:
+                tested.append({"interface": iface, "reachable": False})
+
+        return {"wan_interface": wan_iface, "tested": tested}
+    except Exception as e:
+        logger.error(f"WAN detect failed for {device_id}: {e}")
+        return {"wan_interface": None, "tested": [], "error": str(e)}
+
+
+@router.get("/dashboard/traffic-history")
+async def traffic_history_range(
+    device_id: str = "",
+    range: str = "24h",         # 1h, 12h, 24h, week, month
+    date: str = "",             # specific date YYYY-MM-DD for daily view
+    interface: str = "",
+    user=Depends(get_current_user)
+):
+    """Return traffic history with flexible time range filter."""
+    db = get_db()
+    now_utc = datetime.now(timezone.utc)
+
+    if date:
+        # View specific date (00:00 to 23:59 local = UTC-7 adjusted)
+        from datetime import date as date_type
+        try:
+            d = datetime.strptime(date, "%Y-%m-%d")
+            start = d.replace(tzinfo=timezone.utc)
+            end = start + timedelta(days=1)
+        except ValueError:
+            raise HTTPException(400, "Invalid date format, use YYYY-MM-DD")
+    elif range == "1h":
+        start, end = now_utc - timedelta(hours=1), now_utc
+    elif range == "12h":
+        start, end = now_utc - timedelta(hours=12), now_utc
+    elif range == "week":
+        start, end = now_utc - timedelta(days=7), now_utc
+    elif range == "month":
+        start, end = now_utc - timedelta(days=30), now_utc
+    else:  # default 24h
+        start, end = now_utc - timedelta(hours=24), now_utc
+
+    query: dict = {"timestamp": {"$gte": start.isoformat(), "$lte": end.isoformat()}}
+    if device_id:
+        query["device_id"] = device_id
+
+    # Limit points: for 1h load all (fine), for longer ranges sample
+    limit = 500 if range in ("week", "month") else 200
+    history = await db.traffic_history.find(query, {"_id": 0}).sort("timestamp", 1).to_list(limit)
+
+    result = []
+    for h in history:
+        try:
+            utc_time = datetime.fromisoformat(h["timestamp"].replace("Z", "+00:00"))
+            local_time = utc_time.replace(tzinfo=None) + timedelta(hours=7)
+            if range in ("week", "month"):
+                label = local_time.strftime("%d/%m %H:%M")
+            elif date:
+                label = local_time.strftime("%H:%M")
+            else:
+                label = local_time.strftime("%H:%M")
+        except Exception:
+            label = ""
+
+        bw = h.get("bandwidth", {})
+        if interface and interface != "all":
+            ib = bw.get(interface, {})
+            dl, ul = ib.get("download_bps", 0), ib.get("upload_bps", 0)
+        else:
+            dl = sum(v.get("download_bps", 0) for v in bw.values())
+            ul = sum(v.get("upload_bps", 0) for v in bw.values())
+
+        result.append({
+            "time": label, "download": round(dl / 1e6, 2), "upload": round(ul / 1e6, 2),
+            "ping": h.get("ping_ms", 0), "jitter": h.get("jitter_ms", 0)
+        })
+
+    return result

@@ -34,7 +34,7 @@ def _safe_filename(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "_", name)
 
 
-def _export_via_ssh(host: str, username: str, password: str, port: int = 22) -> Optional[str]:
+def _export_via_ssh(host: str, username: str, password: str, port: int = SSH_PORT) -> Optional[str]:
     """Run /export terse on MikroTik via SSH. Works for RouterOS 6 and 7."""
     try:
         import paramiko
@@ -93,7 +93,7 @@ def _get_rsc_export(mt_client, device: dict) -> Optional[str]:
 
     # Method 1: SSH — most reliable, works for ROS6 and ROS7
     if host and username:
-        content = _export_via_ssh(host, username, password)
+        content = _export_via_ssh(host, username, password, port=SSH_PORT)
         if content:
             logger.info(f"RSC export via SSH successful for {host}")
             return content
@@ -147,7 +147,7 @@ async def backup_device_api(device: dict) -> dict:
             "success": False,
             "error": (
                 "Tidak dapat mengambil konfigurasi dari device. "
-                "Pastikan SSH (port 22) aktif di MikroTik: /ip service set ssh disabled=no"
+                f"Pastikan SSH (port {SSH_PORT}) aktif di MikroTik: /ip service set ssh port={SSH_PORT} disabled=no"
             ),
         }
 

@@ -262,8 +262,8 @@ export default function HotspotUsersPage() {
         </div>
       </div>
 
-      {/* Stats bar */}
-      {selectedDevice && !error && users.length > 0 && (
+      {/* Stats bar — hanya administrator */}
+      {selectedDevice && !error && users.length > 0 && user?.role === "administrator" && (
         <div className="flex items-center gap-3 text-xs text-muted-foreground px-1">
           <span>Total: <span className="text-foreground font-mono">{users.length}</span></span>
           <span className="text-green-500">Online: <span className="font-mono">{onlineCount}</span></span>
