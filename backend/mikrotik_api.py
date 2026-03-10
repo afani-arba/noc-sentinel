@@ -109,21 +109,22 @@ class MikroTikRestAPI(MikroTikBase):
         return await self._async_req("GET", "ppp/active")
 
     async def disable_pppoe_user(self, username):
-        """Disable PPPoE secret (user) by username."""
+        """Disable PPPoE secret by username. ROS 7.x REST API: disabled = true (boolean JSON)."""
         secrets = await self.list_pppoe_secrets()
         for s in secrets:
             if s.get("name") == username:
                 mt_id = s.get(".id") or s.get("id", "")
-                return await self._async_req("PATCH", f"ppp/secret/{mt_id}", {"disabled": "true"})
+                # ROS 7.x REST API needs boolean true, not string "true"
+                return await self._async_req("PATCH", f"ppp/secret/{mt_id}", {"disabled": True})
         raise Exception(f"PPPoE user '{username}' tidak ditemukan")
 
     async def enable_pppoe_user(self, username):
-        """Enable PPPoE secret (user) by username."""
+        """Enable PPPoE secret by username."""
         secrets = await self.list_pppoe_secrets()
         for s in secrets:
             if s.get("name") == username:
                 mt_id = s.get(".id") or s.get("id", "")
-                return await self._async_req("PATCH", f"ppp/secret/{mt_id}", {"disabled": "false"})
+                return await self._async_req("PATCH", f"ppp/secret/{mt_id}", {"disabled": False})
         raise Exception(f"PPPoE user '{username}' tidak ditemukan")
 
     async def list_hotspot_users(self):
@@ -142,21 +143,21 @@ class MikroTikRestAPI(MikroTikBase):
         return await self._async_req("GET", "ip/hotspot/active")
 
     async def disable_hotspot_user(self, username):
-        """Disable Hotspot user by username."""
+        """Disable Hotspot user. ROS 7.x REST API: disabled = true (boolean)."""
         users = await self.list_hotspot_users()
         for u in users:
             if u.get("name") == username:
                 mt_id = u.get(".id") or u.get("id", "")
-                return await self._async_req("PATCH", f"ip/hotspot/user/{mt_id}", {"disabled": "true"})
+                return await self._async_req("PATCH", f"ip/hotspot/user/{mt_id}", {"disabled": True})
         raise Exception(f"Hotspot user '{username}' tidak ditemukan")
 
     async def enable_hotspot_user(self, username):
-        """Enable Hotspot user by username."""
+        """Enable Hotspot user."""
         users = await self.list_hotspot_users()
         for u in users:
             if u.get("name") == username:
                 mt_id = u.get(".id") or u.get("id", "")
-                return await self._async_req("PATCH", f"ip/hotspot/user/{mt_id}", {"disabled": "false"})
+                return await self._async_req("PATCH", f"ip/hotspot/user/{mt_id}", {"disabled": False})
         raise Exception(f"Hotspot user '{username}' tidak ditemukan")
 
     async def list_pppoe_profiles(self):
@@ -166,10 +167,15 @@ class MikroTikRestAPI(MikroTikBase):
             return []
 
     async def list_hotspot_profiles(self):
+        """ROS 7.x: /ip/hotspot/user-profile (bukan /user/profile)"""
         try:
-            return await self._async_req("GET", "ip/hotspot/user/profile")
+            return await self._async_req("GET", "ip/hotspot/user-profile")
         except Exception:
-            return []
+            try:
+                # fallback lama
+                return await self._async_req("GET", "ip/hotspot/user/profile")
+            except Exception:
+                return []
 
     async def list_hotspot_servers(self):
         try:
@@ -177,16 +183,64 @@ class MikroTikRestAPI(MikroTikBase):
         except Exception:
             return []
 
-    # ── BGP ──
+    # ── BGP — ROS 7.x pakai /routing/bgp/connection, ROS 6 pakai /routing/bgp/peer ──
     async def list_bgp_peers(self):
         try:
+            # ROS 7.x
             return await self._async_req("GET", "routing/bgp/connection")
         except Exception:
-            return await self._async_req("GET", "routing/bgp/peer")
+            try:
+                # ROS 6.x fallback
+                return await self._async_req("GET", "routing/bgp/peer")
+            except Exception:
+                return []
 
     async def list_bgp_sessions(self):
         try:
             return await self._async_req("GET", "routing/bgp/session")
+        except Exception:
+            return []
+
+    # ── System Resource (ROS 7.x REST API) ──
+    async def get_system_resource(self):
+        """Ambil CPU, memory, uptime dari /rest/system/resource."""
+        try:
+            return await self._async_req("GET", "system/resource")
+        except Exception:
+            return {}
+
+    # ── Interface List ──
+    async def list_interfaces(self):
+        """List semua interface beserta status running/disabled."""
+        try:
+            ifaces = await self._async_req("GET", "interface")
+            return ifaces if isinstance(ifaces, list) else []
+        except Exception:
+            return []
+
+    # ── Interface Traffic (monitor-traffic via POST, ROS 7.x) ──
+    async def get_interface_traffic(self, interface_name: str = "ether1", duration: int = 1):
+        """
+        Ambil traffic realtime via /rest/interface/monitor-traffic.
+        ROS 7.x: POST dengan body {"interface": "ether1", "once": ""}
+        Return: {"rx-bits-per-second": ..., "tx-bits-per-second": ...}
+        """
+        try:
+            result = await self._async_req(
+                "POST", "interface/monitor-traffic",
+                {"interface": interface_name, "once": ""}
+            )
+            if isinstance(result, list):
+                return result[0] if result else {}
+            return result
+        except Exception:
+            return {}
+
+    # ── IP Address List ──
+    async def list_ip_addresses(self):
+        """List semua IP address yang dikonfigurasi."""
+        try:
+            return await self._async_req("GET", "ip/address")
         except Exception:
             return []
 
@@ -410,14 +464,59 @@ class MikroTikRouterAPI(MikroTikBase):
 
     async def list_hotspot_profiles(self):
         try:
-            items = await asyncio.to_thread(self._list_resource, "/ip/hotspot/user/profile")
+            items = await asyncio.to_thread(self._list_resource, "/ip/hotspot/user-profile")
             return self._normalize_items(items)
         except Exception:
-            return []
+            try:
+                items = await asyncio.to_thread(self._list_resource, "/ip/hotspot/user/profile")
+                return self._normalize_items(items)
+            except Exception:
+                return []
 
     async def list_hotspot_servers(self):
         try:
             items = await asyncio.to_thread(self._list_resource, "/ip/hotspot")
+            return self._normalize_items(items)
+        except Exception:
+            return []
+
+    # ── System Resource ──
+    async def get_system_resource(self):
+        """Ambil CPU, memory, uptime dari /system/resource."""
+        try:
+            items = await asyncio.to_thread(self._list_resource, "/system/resource")
+            return items[0] if items else {}
+        except Exception:
+            return {}
+
+    # ── Interface List ──
+    async def list_interfaces(self):
+        try:
+            items = await asyncio.to_thread(self._list_resource, "/interface")
+            return self._normalize_items(items)
+        except Exception:
+            return []
+
+    # ── Interface Traffic (RouterOS 6 API) ──
+    async def get_interface_traffic(self, interface_name: str = "ether1", duration: int = 1):
+        """ROS 6: monitor traffic via API command."""
+        try:
+            def cb(api):
+                resource = api.get_resource("/interface")
+                cmd = api.get_binary_resource("/")
+                return cmd.call(
+                    "interface/monitor-traffic",
+                    {"interface": interface_name, "once": ""}
+                )
+            items = await asyncio.to_thread(self._execute, cb)
+            return items[0] if items else {}
+        except Exception:
+            return {}
+
+    # ── IP Address List ──
+    async def list_ip_addresses(self):
+        try:
+            items = await asyncio.to_thread(self._list_resource, "/ip/address")
             return self._normalize_items(items)
         except Exception:
             return []

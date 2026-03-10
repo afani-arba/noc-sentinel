@@ -140,6 +140,51 @@ async def test_api(device_id: str, user=Depends(get_current_user)):
     return await mt.test_connection()
 
 
+@router.get("/devices/{device_id}/system-resource")
+async def get_system_resource(device_id: str, user=Depends(get_current_user)):
+    """Ambil info CPU, memory, uptime langsung dari MikroTik REST API (ROS 7.x)."""
+    db = get_db()
+    device = await db.devices.find_one({"id": device_id}, {"_id": 0})
+    if not device:
+        raise HTTPException(404, "Device not found")
+    mt = get_api_client(device)
+    try:
+        r = await mt.get_system_resource()
+        return r
+    except Exception as e:
+        raise HTTPException(502, f"MikroTik API error: {e}")
+
+
+@router.get("/devices/{device_id}/interfaces")
+async def get_interfaces(device_id: str, user=Depends(get_current_user)):
+    """List semua interface dari MikroTik (nama, status, type, MAC)."""
+    db = get_db()
+    device = await db.devices.find_one({"id": device_id}, {"_id": 0})
+    if not device:
+        raise HTTPException(404, "Device not found")
+    mt = get_api_client(device)
+    try:
+        ifaces = await mt.list_interfaces()
+        return ifaces
+    except Exception as e:
+        raise HTTPException(502, f"MikroTik API error: {e}")
+
+
+@router.get("/devices/{device_id}/ip-addresses")
+async def get_ip_addresses(device_id: str, user=Depends(get_current_user)):
+    """List semua IP address yang dikonfigurasi di MikroTik."""
+    db = get_db()
+    device = await db.devices.find_one({"id": device_id}, {"_id": 0})
+    if not device:
+        raise HTTPException(404, "Device not found")
+    mt = get_api_client(device)
+    try:
+        addrs = await mt.list_ip_addresses()
+        return addrs
+    except Exception as e:
+        raise HTTPException(502, f"MikroTik API error: {e}")
+
+
 @router.post("/devices/{device_id}/poll")
 async def trigger_poll(device_id: str, user=Depends(get_current_user)):
     db = get_db()
