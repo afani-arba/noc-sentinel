@@ -92,3 +92,19 @@ async def list_pppoe_active(device_id: str, user=Depends(get_current_user)):
         return await mt.list_pppoe_active()
     except Exception as e:
         raise HTTPException(502, f"MikroTik: {e}")
+
+
+@router.get("/pppoe-profiles")
+async def list_pppoe_profiles(device_id: str, user=Depends(get_current_user)):
+    """List PPP profiles from MikroTik (for use in create/edit user forms)."""
+    if not device_id:
+        return []
+    try:
+        mt, _ = await _get_mt_api(device_id)
+        profiles = await mt.list_pppoe_profiles()
+        return [
+            {"name": p.get("name", ""), "rate_limit": p.get("rate-limit", p.get("rate_limit", "")), "comment": p.get("comment", "")}
+            for p in profiles if p.get("name")
+        ]
+    except Exception as e:
+        raise HTTPException(502, f"MikroTik: {e}")

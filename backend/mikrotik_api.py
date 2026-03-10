@@ -27,6 +27,9 @@ class MikroTikBase:
     async def update_hotspot_user(self, mt_id, data): raise NotImplementedError
     async def delete_hotspot_user(self, mt_id): raise NotImplementedError
     async def list_hotspot_active(self): raise NotImplementedError
+    async def list_pppoe_profiles(self): raise NotImplementedError
+    async def list_hotspot_profiles(self): raise NotImplementedError
+    async def list_hotspot_servers(self): raise NotImplementedError
 
 
 # ═══════════════════════════════════════════════════════════
@@ -115,6 +118,24 @@ class MikroTikRestAPI(MikroTikBase):
 
     async def list_hotspot_active(self):
         return await self._async_req("GET", "ip/hotspot/active")
+
+    async def list_pppoe_profiles(self):
+        try:
+            return await self._async_req("GET", "ppp/profile")
+        except Exception:
+            return []
+
+    async def list_hotspot_profiles(self):
+        try:
+            return await self._async_req("GET", "ip/hotspot/user/profile")
+        except Exception:
+            return []
+
+    async def list_hotspot_servers(self):
+        try:
+            return await self._async_req("GET", "ip/hotspot")
+        except Exception:
+            return []
 
     # ── BGP ──
     async def list_bgp_peers(self):
@@ -307,6 +328,27 @@ class MikroTikRouterAPI(MikroTikBase):
     async def list_hotspot_active(self):
         items = await asyncio.to_thread(self._list_resource, "/ip/hotspot/active")
         return self._normalize_items(items)
+
+    async def list_pppoe_profiles(self):
+        try:
+            items = await asyncio.to_thread(self._list_resource, "/ppp/profile")
+            return self._normalize_items(items)
+        except Exception:
+            return []
+
+    async def list_hotspot_profiles(self):
+        try:
+            items = await asyncio.to_thread(self._list_resource, "/ip/hotspot/user/profile")
+            return self._normalize_items(items)
+        except Exception:
+            return []
+
+    async def list_hotspot_servers(self):
+        try:
+            items = await asyncio.to_thread(self._list_resource, "/ip/hotspot")
+            return self._normalize_items(items)
+        except Exception:
+            return []
 
     # ── BGP ──
     async def list_bgp_peers(self):

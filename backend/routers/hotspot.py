@@ -92,3 +92,35 @@ async def list_hotspot_active(device_id: str, user=Depends(get_current_user)):
         return await mt.list_hotspot_active()
     except Exception as e:
         raise HTTPException(502, f"MikroTik: {e}")
+
+
+@router.get("/hotspot-profiles")
+async def list_hotspot_profiles(device_id: str, user=Depends(get_current_user)):
+    """List Hotspot user profiles from MikroTik (for use in create/edit user forms)."""
+    if not device_id:
+        return []
+    try:
+        mt, _ = await _get_mt_api(device_id)
+        profiles = await mt.list_hotspot_profiles()
+        return [
+            {"name": p.get("name", ""), "rate_limit": p.get("rate-limit", p.get("rate_limit", "")), "shared_users": p.get("shared-users", ""), "comment": p.get("comment", "")}
+            for p in profiles if p.get("name")
+        ]
+    except Exception as e:
+        raise HTTPException(502, f"MikroTik: {e}")
+
+
+@router.get("/hotspot-servers")
+async def list_hotspot_servers(device_id: str, user=Depends(get_current_user)):
+    """List Hotspot servers from MikroTik."""
+    if not device_id:
+        return []
+    try:
+        mt, _ = await _get_mt_api(device_id)
+        servers = await mt.list_hotspot_servers()
+        return [
+            {"name": s.get("name", ""), "interface": s.get("interface", "")}
+            for s in servers if s.get("name")
+        ]
+    except Exception as e:
+        raise HTTPException(502, f"MikroTik: {e}")

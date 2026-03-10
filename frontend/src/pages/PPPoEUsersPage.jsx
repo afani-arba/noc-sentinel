@@ -121,6 +121,8 @@ export default function PPPoEUsersPage() {
   const [showFormPwd, setShowFormPwd] = useState(false);
   const [form, setForm] = useState({ name: "", password: "", profile: "default", service: "pppoe", comment: "" });
   const [page, setPage] = useState(0);
+  const [profiles, setProfiles] = useState([]);
+  const [profilesLoading, setProfilesLoading] = useState(false);
 
   useEffect(() => {
     api.get("/devices").then(r => {
@@ -128,6 +130,16 @@ export default function PPPoEUsersPage() {
       if (r.data.length === 1) setSelectedDevice(r.data[0].id);
     }).catch(() => {});
   }, []);
+
+  // Fetch PPP profiles from MikroTik when device changes
+  useEffect(() => {
+    if (!selectedDevice) { setProfiles([]); return; }
+    setProfilesLoading(true);
+    api.get("/pppoe-profiles", { params: { device_id: selectedDevice } })
+      .then(r => setProfiles(r.data || []))
+      .catch(() => setProfiles([]))
+      .finally(() => setProfilesLoading(false));
+  }, [selectedDevice]);
 
   const fetchUsers = useCallback(async () => {
     if (!selectedDevice) return;
@@ -334,12 +346,49 @@ export default function PPPoEUsersPage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Profile</Label>
-                <Input value={form.profile} onChange={e => setForm({ ...form, profile: e.target.value })} className="rounded-sm bg-background" data-testid="pppoe-form-profile" />
+                <Label className="text-xs text-muted-foreground">
+                  Profile {profilesLoading && <span className="text-[10px] text-muted-foreground/60"> (loading...)</span>}
+                </Label>
+                {profiles.length > 0 ? (
+                  <Select value={form.profile} onValueChange={v => setForm({ ...form, profile: v })}>
+                    <SelectTrigger className="rounded-sm bg-background" data-testid="pppoe-form-profile">
+                      <SelectValue placeholder="Pilih profile..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {profiles.map(p => (
+                        <SelectItem key={p.name} value={p.name}>
+                          <div className="flex flex-col items-start">
+                            <span>{p.name}</span>
+                            {p.rate_limit && <span className="text-[10px] text-muted-foreground">{p.rate_limit}</span>}
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input
+                    value={form.profile}
+                    onChange={e => setForm({ ...form, profile: e.target.value })}
+                    className="rounded-sm bg-background"
+                    placeholder={profilesLoading ? "Loading..." : "default"}
+                    data-testid="pppoe-form-profile"
+                  />
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Service</Label>
-                <Input value={form.service} onChange={e => setForm({ ...form, service: e.target.value })} className="rounded-sm bg-background" data-testid="pppoe-form-service" />
+                <Select value={form.service} onValueChange={v => setForm({ ...form, service: v })}>
+                  <SelectTrigger className="rounded-sm bg-background" data-testid="pppoe-form-service">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pppoe">pppoe</SelectItem>
+                    <SelectItem value="pptp">pptp</SelectItem>
+                    <SelectItem value="l2tp">l2tp</SelectItem>
+                    <SelectItem value="sstp">sstp</SelectItem>
+                    <SelectItem value="any">any</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             {editing && (

@@ -120,6 +120,9 @@ export default function HotspotUsersPage() {
   const [showFormPwd, setShowFormPwd] = useState(false);
   const [form, setForm] = useState({ name: "", password: "", profile: "default", server: "all", comment: "" });
   const [page, setPage] = useState(0);
+  const [profiles, setProfiles] = useState([]);
+  const [servers, setServers] = useState([]);
+  const [profilesLoading, setProfilesLoading] = useState(false);
 
   useEffect(() => {
     api.get("/devices").then(r => {
@@ -127,6 +130,19 @@ export default function HotspotUsersPage() {
       if (r.data.length === 1) setSelectedDevice(r.data[0].id);
     }).catch(() => {});
   }, []);
+
+  // Fetch Hotspot profiles + servers from MikroTik when device changes
+  useEffect(() => {
+    if (!selectedDevice) { setProfiles([]); setServers([]); return; }
+    setProfilesLoading(true);
+    Promise.all([
+      api.get("/hotspot-profiles", { params: { device_id: selectedDevice } }).then(r => r.data).catch(() => []),
+      api.get("/hotspot-servers", { params: { device_id: selectedDevice } }).then(r => r.data).catch(() => []),
+    ]).then(([prof, srv]) => {
+      setProfiles(prof || []);
+      setServers(srv || []);
+    }).finally(() => setProfilesLoading(false));
+  }, [selectedDevice]);
 
   const fetchUsers = useCallback(async () => {
     if (!selectedDevice) return;
@@ -331,12 +347,63 @@ export default function HotspotUsersPage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Profile</Label>
-                <Input value={form.profile} onChange={e => setForm({ ...form, profile: e.target.value })} className="rounded-sm bg-background" data-testid="hotspot-form-profile" />
+                <Label className="text-xs text-muted-foreground">
+                  Profile {profilesLoading && <span className="text-[10px] text-muted-foreground/60"> (loading...)</span>}
+                </Label>
+                {profiles.length > 0 ? (
+                  <Select value={form.profile} onValueChange={v => setForm({ ...form, profile: v })}>
+                    <SelectTrigger className="rounded-sm bg-background" data-testid="hotspot-form-profile">
+                      <SelectValue placeholder="Pilih profile..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {profiles.map(p => (
+                        <SelectItem key={p.name} value={p.name}>
+                          <div className="flex flex-col items-start">
+                            <span>{p.name}</span>
+                            {p.rate_limit && <span className="text-[10px] text-muted-foreground">{p.rate_limit}</span>}
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input
+                    value={form.profile}
+                    onChange={e => setForm({ ...form, profile: e.target.value })}
+                    className="rounded-sm bg-background"
+                    placeholder={profilesLoading ? "Loading..." : "default"}
+                    data-testid="hotspot-form-profile"
+                  />
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Server</Label>
-                <Input value={form.server} onChange={e => setForm({ ...form, server: e.target.value })} className="rounded-sm bg-background" data-testid="hotspot-form-server" />
+                {servers.length > 0 ? (
+                  <Select value={form.server} onValueChange={v => setForm({ ...form, server: v })}>
+                    <SelectTrigger className="rounded-sm bg-background" data-testid="hotspot-form-server">
+                      <SelectValue placeholder="Pilih server..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">all</SelectItem>
+                      {servers.map(s => (
+                        <SelectItem key={s.name} value={s.name}>
+                          <div className="flex flex-col items-start">
+                            <span>{s.name}</span>
+                            {s.interface && <span className="text-[10px] text-muted-foreground">{s.interface}</span>}
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input
+                    value={form.server}
+                    onChange={e => setForm({ ...form, server: e.target.value })}
+                    className="rounded-sm bg-background"
+                    placeholder="all"
+                    data-testid="hotspot-form-server"
+                  />
+                )}
               </div>
             </div>
             {editing && (
