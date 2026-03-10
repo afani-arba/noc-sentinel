@@ -21,7 +21,7 @@ function InfluxDBSection() {
         setStatus(r.data);
         if (r.data.url) setCfg(c => ({ ...c, url: r.data.url || "", org: r.data.org || "", bucket: r.data.bucket || "noc-sentinel" }));
       })
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   const handleSave = async () => {
@@ -62,9 +62,8 @@ function InfluxDBSection() {
             <p className="text-[10px] sm:text-xs text-muted-foreground">Simpan metrik historis dengan resolusi tinggi</p>
           </div>
         </div>
-        <div className={`flex items-center gap-1.5 px-2 py-1 rounded-sm text-[10px] font-medium border ${
-          status?.connected ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-secondary text-muted-foreground border-border"
-        }`}>
+        <div className={`flex items-center gap-1.5 px-2 py-1 rounded-sm text-[10px] font-medium border ${status?.connected ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-secondary text-muted-foreground border-border"
+          }`}>
           {status?.connected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
           {status?.connected ? `Terhubung (v${status.version})` : "Tidak Terhubung"}
         </div>
@@ -182,7 +181,7 @@ function GenieACSSection() {
   useEffect(() => {
     api.get("/system/genieacs-config").then(r => {
       setCfg(c => ({ ...c, url: r.data.url || "", username: r.data.username || "" }));
-    }).catch(() => {});
+    }).catch(() => { });
   }, []);
 
   const handleSave = async () => {
@@ -222,9 +221,8 @@ function GenieACSSection() {
           </div>
         </div>
         {testResult && (
-          <div className={`flex items-center gap-1.5 px-2 py-1 rounded-sm text-[10px] font-medium border ${
-            testResult.success ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-red-500/10 text-red-400 border-red-500/20"
-          }`}>
+          <div className={`flex items-center gap-1.5 px-2 py-1 rounded-sm text-[10px] font-medium border ${testResult.success ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-red-500/10 text-red-400 border-red-500/20"
+            }`}>
             {testResult.success ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
             {testResult.success ? `Terhubung — ${testResult.stats?.total ?? 0} CPE` : "Gagal Terhubung"}
           </div>
@@ -295,10 +293,24 @@ export default function SettingsPage() {
   const [updateLog, setUpdateLog] = useState([]);
   const [updateDone, setUpdateDone] = useState(false);
   const [appInfo, setAppInfo] = useState(null);
+  const [serviceName, setServiceName] = useState("noc-backend");
+  const [savingSvc, setSavingSvc] = useState(false);
 
   useEffect(() => {
-    api.get("/system/app-info").then(r => setAppInfo(r.data)).catch(() => {});
+    api.get("/system/app-info").then(r => {
+      setAppInfo(r.data);
+      if (r.data.service_name) setServiceName(r.data.service_name);
+    }).catch(() => { });
   }, []);
+
+  const saveServiceName = async () => {
+    setSavingSvc(true);
+    try {
+      const r = await api.post("/system/save-service-name", { service_name: serviceName });
+      toast.success(r.data.message);
+    } catch (e) { toast.error(e.response?.data?.detail || "Gagal"); }
+    setSavingSvc(false);
+  };
 
   const checkUpdate = async () => {
     setChecking(true); setUpdateInfo(null); setUpdateDone(false); setUpdateLog([]);
@@ -408,14 +420,37 @@ export default function SettingsPage() {
                 {updateLog.map((log, i) => (
                   <div key={i} className={
                     log.startsWith('Error') || log.toLowerCase().includes('gagal') ? 'text-red-400' :
-                    log.startsWith('===') || log.includes('selesai') ? 'text-green-400 font-semibold' :
-                    'text-foreground/70'
+                      log.startsWith('===') || log.includes('selesai') ? 'text-green-400 font-semibold' :
+                        'text-foreground/70'
                   }>{log}</div>
                 ))}
                 {updating && <div className="text-primary animate-pulse">Proses berjalan...</div>}
               </div>
             </div>
           )}
+
+          {/* Konfigurasi Service Name */}
+          <div className="p-3 rounded-sm border border-border bg-secondary/20 space-y-2">
+            <p className="text-xs font-medium text-muted-foreground">⚙️ Konfigurasi Service Systemd</p>
+            <div className="flex gap-2 items-center">
+              <Input
+                value={serviceName}
+                onChange={e => setServiceName(e.target.value)}
+                placeholder="noc-backend"
+                className="h-7 text-xs rounded-sm font-mono flex-1"
+              />
+              <Button size="sm" className="rounded-sm h-7 text-xs gap-1" onClick={saveServiceName} disabled={savingSvc}>
+                <Save className="w-3 h-3" />{savingSvc ? "..." : "Simpan"}
+              </Button>
+            </div>
+            <details className="text-[10px] text-muted-foreground/70">
+              <summary className="cursor-pointer hover:text-muted-foreground">Jika restart service gagal saat update ▸</summary>
+              <div className="mt-2 font-mono p-2 bg-secondary/40 rounded-sm space-y-1">
+                <p className="text-green-400">echo 'www-data ALL=(ALL) NOPASSWD: /bin/systemctl restart {serviceName}' | sudo tee /etc/sudoers.d/noc-sentinel</p>
+                <p className="text-green-400">sudo chmod 0440 /etc/sudoers.d/noc-sentinel</p>
+              </div>
+            </details>
+          </div>
 
           {/* Action buttons */}
           <div className="flex flex-wrap gap-2 pt-2">

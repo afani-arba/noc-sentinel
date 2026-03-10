@@ -6,7 +6,7 @@ import asyncio
 import subprocess
 import logging
 from pathlib import Path
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from core.auth import require_admin
 
 router = APIRouter(prefix="/system", tags=["system"])
@@ -20,7 +20,8 @@ FRONTEND_DIR = str(Path(__file__).parent.parent.parent / "frontend")
 # Candidate paths
 VENV_PIP  = str(Path(BACKEND_DIR) / "venv" / "bin" / "pip")
 UPDATE_SH = str(Path(APP_DIR) / "update.sh")
-SERVICE_NAME = "noc-backend"
+# Baca dari env agar bisa dikonfigurasi tanpa edit kode
+SERVICE_NAME = os.environ.get("NOC_SERVICE_NAME", "noc-backend")
 
 
 @router.get("/check-update")
@@ -113,13 +114,31 @@ async def check_update(user=Depends(require_admin)):
 async def perform_update(user=Depends(require_admin)):
     """Pull latest changes from GitHub and rebuild frontend."""
     log = []
+    svc_name = os.environ.get("NOC_SERVICE_NAME", "noc-backend")
+
+    def _check_sudo():
+        """Cek apakah sudo systemctl diizinkan."""
+        test = subprocess.run(
+            ["sudo", "-n", "systemctl", "status", svc_name],
+            capture_output=True, text=True, timeout=5
+        )
+        return test.returncode == 0
 
     def _do_update():
         nonlocal log
 
-        # ── Try update.sh first (most reliable) ──────────────────────────
+        # ── Cek sudo permission lebih awal ──────────────────────────
+        sudo_ok = _check_sudo()
+        if not sudo_ok:
+            log.append("⚠️  sudo tidak dikonfigurasi untuk restart service!")
+            log.append(f"   Jalankan di server sebagai root:")
+            log.append(f"   echo 'www-data ALL=(ALL) NOPASSWD: /bin/systemctl restart {svc_name}' | sudo tee /etc/sudoers.d/noc-sentinel")
+            log.append(f"   sudo chmod 0440 /etc/sudoers.d/noc-sentinel")
+            log.append("   Lanjut proses update, tapi restart otomatis akan dilewati...")
+
+        # ── Try update.sh first (most reliable) ─────────────────────
         if Path(UPDATE_SH).exists():
-            log.append(f"Menjalankan update.sh...")
+            log.append("Menjalankan update.sh...")
             result = subprocess.run(
                 ["bash", UPDATE_SH],
                 capture_output=True, text=True, cwd=APP_DIR, timeout=600
@@ -129,72 +148,82 @@ async def perform_update(user=Depends(require_admin)):
                 if line.strip():
                     log.append(line.strip())
             if result.returncode == 0:
-                log.append("Update selesai!")
+                log.append("✅ Update selesai via update.sh!")
                 return {"success": True, "log": log}
             else:
-                log.append(f"update.sh gagal (exit {result.returncode}), mencoba metode manual...")
+                log.append(f"❌ update.sh gagal (exit code {result.returncode}), fallback ke metode manual...")
                 log = ["Fallback ke metode manual..."]
 
-        # ── Fallback: inline steps ────────────────────────────────────────
-        log.append("Menjalankan git pull...")
+        # ── Fallback: inline steps ───────────────────────────────
+        log.append("[1/4] Git pull...")
         pull = subprocess.run(
             ["git", "pull", "origin", "main"], capture_output=True, text=True, cwd=APP_DIR, timeout=60
         )
         if pull.returncode != 0:
-            # try master
             pull = subprocess.run(
                 ["git", "pull", "origin", "master"], capture_output=True, text=True, cwd=APP_DIR, timeout=60
             )
         if pull.returncode != 0:
-            log.append(f"Error git pull: {pull.stderr.strip()}")
-            return {"success": False, "log": log, "error": pull.stderr}
-        log.append(pull.stdout.strip() or "Git pull berhasil")
+            err = pull.stderr.strip() or pull.stdout.strip()
+            log.append(f"❌ Git pull GAGAL: {err}")
+            return {"success": False, "log": log, "error": err}
+        log.append(f"✅ {pull.stdout.strip() or 'Git pull berhasil'}")
 
-        # Install backend deps dengan venv pip
-        log.append("Menginstall dependensi backend...")
+        # Install backend deps
+        log.append("[2/4] Install dependensi backend...")
         pip_cmd = VENV_PIP if Path(VENV_PIP).exists() else "pip3"
         pip = subprocess.run(
             [pip_cmd, "install", "-r", "requirements.txt", "-q"],
             capture_output=True, text=True, cwd=BACKEND_DIR, timeout=180
         )
-        log.append("Backend deps ok" if pip.returncode == 0 else f"Warning pip: {pip.stderr[:300]}")
+        if pip.returncode == 0:
+            log.append("✅ Backend deps OK")
+        else:
+            log.append(f"⚠️ pip warning: {pip.stderr[:300]}")
 
         # Install frontend deps
-        log.append("Menginstall dependensi frontend...")
+        log.append("[3/4] Install + build frontend...")
         yarn_path = subprocess.run(["which", "yarn"], capture_output=True, text=True).stdout.strip() or "yarn"
         yarn_install = subprocess.run(
             [yarn_path, "install", "--silent"],
             capture_output=True, text=True, cwd=FRONTEND_DIR, timeout=180
         )
-        log.append("Frontend deps ok" if yarn_install.returncode == 0 else f"Warning yarn install: {yarn_install.stderr[:300]}")
+        if yarn_install.returncode != 0:
+            log.append(f"⚠️ yarn install warning: {yarn_install.stderr[:200]}")
 
         # Build frontend
-        log.append("Building frontend...")
         yarn_build = subprocess.run(
             [yarn_path, "build"],
             capture_output=True, text=True, cwd=FRONTEND_DIR, timeout=600,
             env={**dict(os.environ), "CI": "false", "DISABLE_ESLINT_PLUGIN": "true"}
         )
         if yarn_build.returncode == 0:
-            log.append("Frontend build berhasil!")
+            log.append("✅ Frontend build berhasil")
         else:
-            log.append(f"Warning build: {yarn_build.stderr[:400]}")
+            err_short = (yarn_build.stderr or yarn_build.stdout)[:500]
+            log.append(f"❌ Frontend build GAGAL:\n{err_short}")
+            return {"success": False, "log": log, "error": "Frontend build failed"}
 
         # Restart service
-        log.append(f"Merestart service {SERVICE_NAME}...")
-        try:
-            restart = subprocess.run(
-                ["sudo", "systemctl", "restart", SERVICE_NAME],
-                capture_output=True, text=True, timeout=30
-            )
-            if restart.returncode == 0:
-                log.append(f"Service {SERVICE_NAME} berhasil di-restart!")
-            else:
-                log.append(f"Note: Restart manual diperlukan — sudo systemctl restart {SERVICE_NAME}")
-        except Exception as e:
-            log.append(f"Note: Silakan restart service manual: sudo systemctl restart {SERVICE_NAME}")
+        log.append(f"[4/4] Restart service {svc_name}...")
+        if sudo_ok:
+            try:
+                restart = subprocess.run(
+                    ["sudo", "systemctl", "restart", svc_name],
+                    capture_output=True, text=True, timeout=30
+                )
+                if restart.returncode == 0:
+                    log.append(f"✅ Service {svc_name} berhasil di-restart!")
+                else:
+                    log.append(f"❌ Restart gagal: {restart.stderr.strip()}")
+                    log.append(f"   Jalankan manual: sudo systemctl restart {svc_name}")
+            except Exception as e:
+                log.append(f"❌ Restart exception: {e}")
+        else:
+            log.append(f"⚠️ Restart dilewati (sudo tidak diizinkan)")
+            log.append(f"   Jalankan manual di server: sudo systemctl restart {svc_name}")
 
-        log.append("Update selesai!")
+        log.append("✅ Update selesai!")
         return {"success": True, "log": log}
 
     try:
@@ -202,13 +231,14 @@ async def perform_update(user=Depends(require_admin)):
         return result
     except Exception as e:
         logger.error(f"Update error: {e}")
-        log.append(f"Error: {str(e)}")
+        log.append(f"❌ Error: {str(e)}")
         return {"success": False, "log": log, "error": str(e)}
 
 
 @router.get("/app-info")
 async def app_info():
     """Return current app version info (commit hash, message, date)."""
+    svc_name = os.environ.get("NOC_SERVICE_NAME", "noc-backend")
     try:
         commit = subprocess.run(
             ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=APP_DIR, timeout=5
@@ -224,9 +254,44 @@ async def app_info():
             "message": msg.stdout.strip() if msg.returncode == 0 else "",
             "date": date.stdout.strip()[:19] if date.returncode == 0 else "",
             "version": "v2.5",
+            "service_name": svc_name,
         }
     except Exception:
-        return {"commit": "unknown", "message": "", "date": "", "version": "v2.5"}
+        return {"commit": "unknown", "message": "", "date": "", "version": "v2.5", "service_name": svc_name}
+
+
+@router.get("/service-name")
+async def get_service_name(user=Depends(require_admin)):
+    """Return nama service systemd yang digunakan."""
+    return {"service_name": os.environ.get("NOC_SERVICE_NAME", "noc-backend")}
+
+
+@router.post("/save-service-name")
+async def save_service_name(data: dict, user=Depends(require_admin)):
+    """Simpan nama service ke .env agar persisten."""
+    svc = (data.get("service_name") or "").strip()
+    if not svc:
+        raise HTTPException(400, "Nama service tidak boleh kosong")
+
+    backend_dir = Path(__file__).parent.parent
+    env_path = backend_dir / ".env"
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+
+    updated = False
+    new_lines = []
+    for line in lines:
+        if line.startswith("NOC_SERVICE_NAME="):
+            new_lines.append(f"NOC_SERVICE_NAME={svc}")
+            updated = True
+        else:
+            new_lines.append(line)
+    if not updated:
+        new_lines.append(f"NOC_SERVICE_NAME={svc}")
+
+    env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    os.environ["NOC_SERVICE_NAME"] = svc
+    logger.info(f"Service name saved: {svc}")
+    return {"message": f"Nama service disimpan: {svc}"}
 
 
 @router.post("/save-influxdb-config")

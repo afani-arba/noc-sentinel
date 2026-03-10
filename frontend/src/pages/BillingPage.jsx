@@ -849,8 +849,17 @@ function ImportModal({ onClose, onImported }) {
 function PackagesTab({ packages, onRefresh }) {
   const [showForm, setShowForm] = useState(false);
   const [editPkg, setEditPkg] = useState(null);
+  const [devices, setDevices] = useState([]);
+  const [syncDevice, setSyncDevice] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const [editPrice, setEditPrice] = useState({}); // {pkg_id: price_value}
+  const [savingPrice, setSavingPrice] = useState({});
   const { user } = useAuth();
   const isAdmin = user?.role === "administrator";
+
+  useEffect(() => {
+    api.get("/devices").then(r => setDevices(r.data)).catch(() => { });
+  }, []);
 
   const deletePkg = async (id) => {
     if (!window.confirm("Hapus paket ini?")) return;
@@ -858,49 +867,158 @@ function PackagesTab({ packages, onRefresh }) {
     catch (e) { toast.error(e.response?.data?.detail || "Gagal"); }
   };
 
+  const syncFromMikroTik = async () => {
+    if (!syncDevice) { toast.error("Pilih device dulu"); return; }
+    setSyncing(true);
+    try {
+      const r = await api.post("/billing/packages/sync-from-mikrotik", null, {
+        params: { device_id: syncDevice }
+      });
+      toast.success(r.data.message);
+      onRefresh();
+    } catch (e) { toast.error(e.response?.data?.detail || "Gagal sync"); }
+    setSyncing(false);
+  };
+
+  const savePrice = async (pkg) => {
+    const price = editPrice[pkg.id];
+    if (price === undefined) return;
+    setSavingPrice(s => ({ ...s, [pkg.id]: true }));
+    try {
+      await api.patch(`/billing/packages/${pkg.id}/price`, { price: Number(price) });
+      toast.success(`Harga ${pkg.name} disimpan`);
+      setEditPrice(p => { const n = { ...p }; delete n[pkg.id]; return n; });
+      onRefresh();
+    } catch (e) { toast.error(e.response?.data?.detail || "Gagal"); }
+    setSavingPrice(s => ({ ...s, [pkg.id]: false }));
+  };
+
+  const toggleActive = async (pkg) => {
+    try {
+      await api.patch(`/billing/packages/${pkg.id}/price`, { active: !pkg.active });
+      toast.success(`Paket ${pkg.active ? "dinonaktifkan" : "diaktifkan"}`);
+      onRefresh();
+    } catch (e) { toast.error(e.response?.data?.detail || "Gagal"); }
+  };
+
   return (
     <div className="space-y-3">
-      <div className="flex justify-end">
-        {isAdmin && (
-          <Button size="sm" className="rounded-sm h-8 gap-1 text-xs" onClick={() => { setEditPkg(null); setShowForm(true); }}>
-            <Plus className="w-3.5 h-3.5" /> Tambah Paket
+      {/* Toolbar: Sync dari MikroTik + Tambah Manual */}
+      {isAdmin && (
+        <div className="flex flex-wrap gap-2 items-center">
+          <div className="flex items-center gap-1 flex-1 min-w-[200px]">
+            <select value={syncDevice} onChange={e => setSyncDevice(e.target.value)}
+              className="flex-1 h-8 text-xs rounded-sm border border-border bg-secondary px-2 text-foreground">
+              <option value="">Pilih device MikroTik...</option>
+              {devices.map(d => <option key={d.id} value={d.id}>{d.name} ({d.host})</option>)}
+            </select>
+            <Button size="sm" variant="outline"
+              className="rounded-sm h-8 gap-1 text-xs border-blue-500/40 text-blue-400 hover:bg-blue-500/10 whitespace-nowrap"
+              onClick={syncFromMikroTik} disabled={syncing || !syncDevice}>
+              <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
+              {syncing ? "Sync..." : "Sync Profile"}
+            </Button>
+          </div>
+          <Button size="sm" variant="outline" className="rounded-sm h-8 gap-1 text-xs whitespace-nowrap"
+            onClick={() => { setEditPkg(null); setShowForm(true); }}>
+            <Plus className="w-3.5 h-3.5" /> Tambah Manual
           </Button>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* Info hint */}
       {packages.length === 0 ? (
         <div className="text-center py-10">
           <Package className="w-10 h-10 text-muted-foreground/30 mx-auto mb-2" />
-          <p className="text-muted-foreground text-sm">Belum ada paket</p>
+          <p className="text-muted-foreground text-sm mb-1">Belum ada paket</p>
+          <p className="text-[11px] text-muted-foreground/60">Pilih device MikroTik lalu klik "Sync Profile" untuk mengambil daftar paket</p>
         </div>
       ) : (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {packages.map(p => (
-            <div key={p.id} className="bg-secondary/20 border border-border rounded-sm p-4 space-y-2">
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="font-semibold text-sm">{p.name}</p>
-                  <p className="text-xs text-muted-foreground capitalize">{p.type} • {p.billing_cycle} hari</p>
-                </div>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-sm border ${p.active ? "border-green-500/30 text-green-400" : "border-red-500/30 text-red-400"}`}>
-                  {p.active ? "Aktif" : "Non-aktif"}
-                </span>
-              </div>
-              <p className="text-xl font-bold font-mono text-primary">{Rp(p.price)}<span className="text-xs text-muted-foreground font-normal">/bln</span></p>
-              {(p.speed_up || p.speed_down) && (
-                <p className="text-[10px] text-muted-foreground">⬆ {p.speed_up} ⬇ {p.speed_down}</p>
-              )}
-              {isAdmin && (
-                <div className="flex gap-1 pt-1">
-                  <Button size="sm" variant="outline" className="flex-1 rounded-sm h-7 text-xs gap-1" onClick={() => { setEditPkg(p); setShowForm(true); }}>
-                    <Edit2 className="w-3 h-3" /> Edit
-                  </Button>
-                  <Button size="sm" variant="outline" className="rounded-sm h-7 text-xs text-destructive hover:bg-destructive/10" onClick={() => deletePkg(p.id)}>
-                    <Trash2 className="w-3 h-3" />
-                  </Button>
-                </div>
-              )}
-            </div>
-          ))}
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border">
+                {["Nama Paket", "Tipe", "Speed", "Harga/Bulan", "Status", ""].map(h => (
+                  <th key={h} className="px-3 py-2 text-left text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {packages.map(p => (
+                <tr key={p.id} className="border-b border-border/40 hover:bg-secondary/20">
+                  <td className="px-3 py-2.5">
+                    <p className="text-xs font-medium">{p.name}</p>
+                    {p.source_device_name && (
+                      <p className="text-[10px] text-muted-foreground">{p.source_device_name}</p>
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-sm border ${p.service_type === "pppoe" || p.type === "pppoe"
+                        ? "border-blue-500/30 text-blue-400"
+                        : "border-purple-500/30 text-purple-400"
+                      }`}>
+                      {(p.service_type || p.type || "pppoe").toUpperCase()}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-[10px] text-muted-foreground">
+                    {(p.speed_down || p.speed_up) ? `⬇${p.speed_down} ⬆${p.speed_up}` : "—"}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    {isAdmin ? (
+                      <div className="flex items-center gap-1">
+                        <Input
+                          type="number"
+                          value={editPrice[p.id] !== undefined ? editPrice[p.id] : p.price}
+                          onChange={e => setEditPrice(prev => ({ ...prev, [p.id]: e.target.value }))}
+                          className="h-7 w-28 text-xs rounded-sm font-mono"
+                          min="0"
+                        />
+                        {editPrice[p.id] !== undefined && (
+                          <Button size="sm" className="h-7 px-2 text-xs rounded-sm"
+                            onClick={() => savePrice(p)}
+                            disabled={savingPrice[p.id]}>
+                            {savingPrice[p.id] ? "..." : "✓"}
+                          </Button>
+                        )}
+                      </div>
+                    ) : (
+                      <span className={`font-mono text-xs font-bold ${p.price > 0 ? 'text-primary' : 'text-amber-400'
+                        }`}>
+                        {p.price > 0 ? Rp(p.price) : 'Belum diisi'}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    {isAdmin ? (
+                      <button onClick={() => toggleActive(p)}
+                        className={`text-[10px] px-1.5 py-0.5 rounded-sm border cursor-pointer transition-colors ${p.active ? "border-green-500/30 text-green-400 hover:bg-green-500/10" : "border-red-500/30 text-red-400 hover:bg-red-500/10"
+                          }`}>
+                        {p.active ? "Aktif" : "Non-aktif"}
+                      </button>
+                    ) : (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-sm border ${p.active ? "border-green-500/30 text-green-400" : "border-red-500/30 text-red-400"
+                        }`}>{p.active ? "Aktif" : "Non-aktif"}</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    {isAdmin && (
+                      <div className="flex gap-1">
+                        <Button size="icon" variant="ghost" className="h-6 w-6"
+                          onClick={() => { setEditPkg(p); setShowForm(true); }}>
+                          <Edit2 className="w-3 h-3" />
+                        </Button>
+                        <Button size="icon" variant="ghost" className="h-6 w-6"
+                          onClick={() => deletePkg(p.id)}>
+                          <Trash2 className="w-3 h-3 text-destructive" />
+                        </Button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="text-[10px] text-muted-foreground mt-2 text-right font-mono">{packages.length} paket</p>
         </div>
       )}
       {showForm && <PackageForm initial={editPkg} onClose={() => setShowForm(false)} onSaved={() => { setShowForm(false); onRefresh(); }} />}

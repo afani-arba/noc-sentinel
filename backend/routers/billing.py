@@ -91,8 +91,141 @@ async def delete_package(pkg_id: str, user=Depends(require_admin)):
     return {"message": "Paket dihapus"}
 
 
+@router.post("/packages/sync-from-mikrotik")
+async def sync_packages_from_mikrotik(
+    device_id: str = Query(..., description="ID device MikroTik"),
+    user=Depends(require_admin),
+):
+    """
+    Ambil semua profile PPPoE + Hotspot dari device MikroTik.
+    Jika profile belum ada di billing_packages → buat baru dengan price=0.
+    Jika sudah ada → biarkan (harga tidak diubah).
+    Return: daftar paket yang baru ditambahkan dan yang sudah ada.
+    """
+    db = get_db()
+    device = await db.devices.find_one({"id": device_id})
+    if not device:
+        raise HTTPException(404, "Device tidak ditemukan")
+
+    from mikrotik_api import get_api_client
+    try:
+        mt = get_api_client(device)
+    except Exception as e:
+        raise HTTPException(502, f"Gagal inisialisasi MikroTik client: {e}")
+
+    # Ambil profile dari MikroTik
+    pppoe_profiles, hotspot_profiles = [], []
+    try:
+        pppoe_profiles = await mt.list_pppoe_profiles() or []
+    except Exception as e:
+        pppoe_profiles = []
+
+    try:
+        hotspot_profiles = await mt.list_hotspot_profiles() or []
+    except Exception as e:
+        hotspot_profiles = []
+
+    added, existing = [], []
+    device_name = device.get("name", device.get("host", device_id))
+
+    # Proses PPPoE profiles
+    for p in pppoe_profiles:
+        pname = p.get("name", "")
+        if not pname or pname == "default":
+            continue
+        existing_pkg = await db.billing_packages.find_one({
+            "profile_name": pname,
+            "service_type": "pppoe",
+            "source_device_id": device_id,
+        })
+        if existing_pkg:
+            existing.append(pname)
+            continue
+        doc = {
+            "id": str(uuid.uuid4()),
+            "name": pname,
+            "profile_name": pname,
+            "source_device_id": device_id,
+            "source_device_name": device_name,
+            "service_type": "pppoe",
+            "price": 0,
+            "speed_up": p.get("rate-limit", "").split("/")[1] if "/" in p.get("rate-limit", "") else "",
+            "speed_down": p.get("rate-limit", "").split("/")[0] if "/" in p.get("rate-limit", "") else "",
+            "billing_cycle": 30,
+            "active": True,
+            "synced_at": _now(),
+            "created_at": _now(),
+        }
+        await db.billing_packages.insert_one(doc)
+        doc.pop("_id", None)
+        added.append(pname)
+
+    # Proses Hotspot profiles
+    for p in hotspot_profiles:
+        pname = p.get("name", "")
+        if not pname or pname == "default":
+            continue
+        existing_pkg = await db.billing_packages.find_one({
+            "profile_name": pname,
+            "service_type": "hotspot",
+            "source_device_id": device_id,
+        })
+        if existing_pkg:
+            existing.append(f"{pname} (hs)")
+            continue
+        doc = {
+            "id": str(uuid.uuid4()),
+            "name": f"{pname} (Hotspot)",
+            "profile_name": pname,
+            "source_device_id": device_id,
+            "source_device_name": device_name,
+            "service_type": "hotspot",
+            "price": 0,
+            "speed_up": p.get("rate-limit", "").split("/")[1] if "/" in p.get("rate-limit", "") else "",
+            "speed_down": p.get("rate-limit", "").split("/")[0] if "/" in p.get("rate-limit", "") else "",
+            "billing_cycle": 30,
+            "active": True,
+            "synced_at": _now(),
+            "created_at": _now(),
+        }
+        await db.billing_packages.insert_one(doc)
+        doc.pop("_id", None)
+        added.append(f"{pname} (Hotspot)")
+
+    return {
+        "message": f"Sync selesai: {len(added)} paket baru, {len(existing)} sudah ada",
+        "added": added,
+        "existing": existing,
+        "total_pppoe": len(pppoe_profiles),
+        "total_hotspot": len(hotspot_profiles),
+    }
+
+
+@router.patch("/packages/{pkg_id}/price")
+async def update_package_price(pkg_id: str, data: dict, user=Depends(require_write)):
+    """Update harga paket (dipakai admin untuk set harga setelah sync dari MikroTik)."""
+    db = get_db()
+    price = data.get("price")
+    active = data.get("active")
+    update_set = {}
+    if price is not None:
+        try:
+            update_set["price"] = int(price)
+        except (ValueError, TypeError):
+            raise HTTPException(400, "Harga tidak valid")
+    if active is not None:
+        update_set["active"] = bool(active)
+    if not update_set:
+        raise HTTPException(400, "Tidak ada perubahan")
+    result = await db.billing_packages.update_one({"id": pkg_id}, {"$set": update_set})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Paket tidak ditemukan")
+    return {"message": "Harga paket diupdate"}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # INVOICES
+
 # ══════════════════════════════════════════════════════════════════════════════
 
 class InvoiceCreate(BaseModel):
