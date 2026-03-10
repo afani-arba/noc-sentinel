@@ -18,6 +18,7 @@ import RoutingPage from "@/pages/RoutingPage";
 import ConnectionsPage from "@/pages/ConnectionsPage";
 import FirewallPage from "@/pages/FirewallPage";
 import GenieACSPage from "@/pages/GenieACSPage";
+import BillingPage from "@/pages/BillingPage";
 import Layout from "@/components/Layout";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -116,6 +117,7 @@ function App() {
             <Route path="connections" element={<ConnectionsPage />} />
             <Route path="firewall" element={<FirewallPage />} />
             <Route path="genieacs" element={<GenieACSPage />} />
+            <Route path="billing" element={<ProtectedRoute allowedRoles={["administrator"]}><BillingPage /></ProtectedRoute>} />
           </Route>
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>

@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/App";
 import {
   LayoutDashboard, Users, Wifi, FileText, Server, Shield, LogOut, Menu, X, ChevronLeft, Settings, Bell, HardDrive, Terminal,
-  GitBranch, Route, Cable, ShieldAlert, Cpu
+  GitBranch, Route, Cable, ShieldAlert, Cpu, Receipt
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +24,7 @@ const navItems = [
   { separator: true, label: "CPE Management" },
   { to: "/genieacs", icon: Cpu, label: "GenieACS / TR-069" },
   { separator: true, label: "Admin", adminOnly: true },
+  { to: "/billing", icon: Receipt, label: "Billing", adminOnly: true },
   { to: "/notifications", icon: Bell, label: "Notifikasi", adminOnly: true },
   { to: "/backups", icon: HardDrive, label: "Backup Config", adminOnly: true },
   { to: "/syslog", icon: Terminal, label: "Syslog", adminOnly: true },

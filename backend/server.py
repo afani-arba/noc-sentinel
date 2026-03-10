@@ -46,6 +46,8 @@ from routers.metrics import router as metrics_router
 from routers.routing import router as routing_router
 from routers.firewall import router as firewall_router
 from routers.genieacs import router as genieacs_router
+from routers.customers import router as customers_router
+from routers.billing import router as billing_router
 
 # ── App factory ────────────────────────────────────────────────────────────
 app = FastAPI(title="NOC-Sentinel API", version="2.5.0")
@@ -75,6 +77,8 @@ api.include_router(metrics_router)
 api.include_router(routing_router)
 api.include_router(firewall_router)
 api.include_router(genieacs_router)
+api.include_router(customers_router)
+api.include_router(billing_router)
 app.include_router(api)
 
 # ── Lifecycle ──────────────────────────────────────────────────────────────
