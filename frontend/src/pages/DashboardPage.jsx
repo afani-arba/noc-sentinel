@@ -95,6 +95,10 @@ export default function DashboardPage() {
   if (!stats) return null;
 
   const td = stats.traffic_data || [];
+  // Defensive aliases — prevent TypeError when API returns partial data
+  const health = stats.system_health || {};
+  const devStat = stats.devices || { online: 0, total: 0 };
+  const bw = stats.total_bandwidth || { download: 0, upload: 0 };
   // Calculate averages only from non-zero values
   const pingValues = td.filter(d => d.ping > 0).map(d => d.ping);
   const jitterValues = td.filter(d => d.jitter > 0).map(d => d.jitter);
@@ -149,9 +153,9 @@ export default function DashboardPage() {
       {/* Stats */}
       <div className="grid grid-cols-2 gap-2 sm:gap-3 sm:grid-cols-3 lg:grid-cols-5">
         {[
-          { label: "Devices", value: `${stats.devices?.online ?? 0}/${stats.devices?.total ?? 0}`, sub: "online/total", icon: Server, color: "text-purple-500", bg: "bg-purple-500/10" },
-          { label: "Download", value: `${stats.total_bandwidth?.download ?? 0}`, sub: "Mbps", icon: ArrowDown, color: "text-blue-500", bg: "bg-blue-500/10" },
-          { label: "Upload", value: `${stats.total_bandwidth?.upload ?? 0}`, sub: "Mbps", icon: ArrowUp, color: "text-green-500", bg: "bg-green-500/10" },
+          { label: "Devices", value: `${devStat.online ?? 0}/${devStat.total ?? 0}`, sub: "online/total", icon: Server, color: "text-purple-500", bg: "bg-purple-500/10" },
+          { label: "Download", value: `${bw.download ?? 0}`, sub: "Mbps", icon: ArrowDown, color: "text-blue-500", bg: "bg-blue-500/10" },
+          { label: "Upload", value: `${bw.upload ?? 0}`, sub: "Mbps", icon: ArrowUp, color: "text-green-500", bg: "bg-green-500/10" },
           { label: "Avg Ping", value: `${avgPing}`, sub: "ms", icon: Activity, color: "text-cyan-500", bg: "bg-cyan-500/10" },
           { label: "Avg Jitter", value: avgJitter, sub: "ms", icon: Activity, color: "text-rose-500", bg: "bg-rose-500/10" },
         ].map((c, i) => (
@@ -232,8 +236,8 @@ export default function DashboardPage() {
           <div className="space-y-4">
             {/* CPU & Memory bars */}
             {[
-              { label: "CPU Load", value: stats.system_health.cpu, icon: Cpu, unit: "%" },
-              { label: "Memory", value: stats.system_health.memory, icon: HardDrive, unit: "%" },
+              { label: "CPU Load", value: health.cpu ?? 0, icon: Cpu, unit: "%" },
+              { label: "Memory", value: health.memory ?? 0, icon: HardDrive, unit: "%" },
             ].map(m => (
               <div key={m.label} className="flex items-center gap-3">
                 <m.icon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
@@ -246,68 +250,68 @@ export default function DashboardPage() {
 
             {/* Temperature sensors */}
             <div className="grid grid-cols-2 gap-3 pt-2 border-t border-border/50">
-              {stats.system_health.cpu_temp > 0 && (
+              {health.cpu_temp > 0 && (
                 <div className="flex items-center gap-2 p-2 rounded-sm bg-secondary/30">
                   <Thermometer className="w-4 h-4 text-orange-500" />
                   <div>
                     <p className="text-[10px] text-muted-foreground">CPU Temp</p>
-                    <p className="text-sm font-mono" style={{ color: stats.system_health.cpu_temp > 70 ? "#ef4444" : stats.system_health.cpu_temp > 50 ? "#f59e0b" : "#10b981" }}>{stats.system_health.cpu_temp}°C</p>
+                    <p className="text-sm font-mono" style={{ color: health.cpu_temp > 70 ? "#ef4444" : health.cpu_temp > 50 ? "#f59e0b" : "#10b981" }}>{health.cpu_temp}°C</p>
                   </div>
                 </div>
               )}
-              {stats.system_health.board_temp > 0 && (
+              {health.board_temp > 0 && (
                 <div className="flex items-center gap-2 p-2 rounded-sm bg-secondary/30">
                   <Thermometer className="w-4 h-4 text-red-500" />
                   <div>
                     <p className="text-[10px] text-muted-foreground">Board Temp</p>
-                    <p className="text-sm font-mono" style={{ color: stats.system_health.board_temp > 60 ? "#ef4444" : stats.system_health.board_temp > 45 ? "#f59e0b" : "#10b981" }}>{stats.system_health.board_temp}°C</p>
+                    <p className="text-sm font-mono" style={{ color: health.board_temp > 60 ? "#ef4444" : health.board_temp > 45 ? "#f59e0b" : "#10b981" }}>{health.board_temp}°C</p>
                   </div>
                 </div>
               )}
-              {stats.system_health.sfp_temp > 0 && (
+              {health.sfp_temp > 0 && (
                 <div className="flex items-center gap-2 p-2 rounded-sm bg-secondary/30">
                   <Thermometer className="w-4 h-4 text-blue-500" />
                   <div>
                     <p className="text-[10px] text-muted-foreground">SFP Temp</p>
-                    <p className="text-sm font-mono" style={{ color: stats.system_health.sfp_temp > 70 ? "#ef4444" : stats.system_health.sfp_temp > 50 ? "#f59e0b" : "#10b981" }}>{stats.system_health.sfp_temp}°C</p>
+                    <p className="text-sm font-mono" style={{ color: health.sfp_temp > 70 ? "#ef4444" : health.sfp_temp > 50 ? "#f59e0b" : "#10b981" }}>{health.sfp_temp}°C</p>
                   </div>
                 </div>
               )}
-              {stats.system_health.switch_temp > 0 && (
+              {health.switch_temp > 0 && (
                 <div className="flex items-center gap-2 p-2 rounded-sm bg-secondary/30">
                   <Thermometer className="w-4 h-4 text-purple-500" />
                   <div>
                     <p className="text-[10px] text-muted-foreground">Switch Temp</p>
-                    <p className="text-sm font-mono" style={{ color: stats.system_health.switch_temp > 70 ? "#ef4444" : stats.system_health.switch_temp > 50 ? "#f59e0b" : "#10b981" }}>{stats.system_health.switch_temp}°C</p>
+                    <p className="text-sm font-mono" style={{ color: health.switch_temp > 70 ? "#ef4444" : health.switch_temp > 50 ? "#f59e0b" : "#10b981" }}>{health.switch_temp}°C</p>
                   </div>
                 </div>
               )}
-              {stats.system_health.voltage > 0 && (
+              {health.voltage > 0 && (
                 <div className="flex items-center gap-2 p-2 rounded-sm bg-secondary/30">
                   <Zap className="w-4 h-4 text-yellow-500" />
                   <div>
                     <p className="text-[10px] text-muted-foreground">Voltage</p>
-                    <p className="text-sm font-mono">{stats.system_health.voltage}V</p>
+                    <p className="text-sm font-mono">{health.voltage}V</p>
                   </div>
                 </div>
               )}
-              {stats.system_health.power > 0 && (
+              {health.power > 0 && (
                 <div className="flex items-center gap-2 p-2 rounded-sm bg-secondary/30">
                   <Battery className="w-4 h-4 text-green-500" />
                   <div>
                     <p className="text-[10px] text-muted-foreground">Power</p>
-                    <p className="text-sm font-mono">{stats.system_health.power}W</p>
+                    <p className="text-sm font-mono">{health.power}W</p>
                   </div>
                 </div>
               )}
             </div>
 
             {/* PSU Status — tampilkan jika ada */}
-            {stats.system_health.psu && Object.keys(stats.system_health.psu).length > 0 && (
+            {health.psu && Object.keys(health.psu).length > 0 && (
               <div className="pt-2 border-t border-border/50">
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">PSU Status</p>
                 <div className="flex gap-2 flex-wrap">
-                  {Object.entries(stats.system_health.psu).map(([psu, state]) => (
+                  {Object.entries(health.psu).map(([psu, state]) => (
                     <div key={psu} className={`flex items-center gap-1.5 px-2 py-1 rounded-sm text-xs font-mono border ${state === "ok" ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-red-500/10 text-red-400 border-red-500/20"}`}>
                       <div className={`w-1.5 h-1.5 rounded-full ${state === "ok" ? "bg-green-500" : "bg-red-500 animate-pulse"}`} />
                       {psu.toUpperCase()}: {state.toUpperCase()}
@@ -318,11 +322,11 @@ export default function DashboardPage() {
             )}
 
             {/* Fan Speeds */}
-            {stats.system_health.fans && Object.keys(stats.system_health.fans).length > 0 && (
+            {health.fans && Object.keys(health.fans).length > 0 && (
               <div className="pt-2 border-t border-border/50">
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Fan Speeds</p>
                 <div className="grid grid-cols-2 gap-1.5">
-                  {Object.entries(stats.system_health.fans).map(([fan, rpm]) => (
+                  {Object.entries(health.fans).map(([fan, rpm]) => (
                     <div key={fan} className="flex items-center justify-between px-2 py-1 rounded-sm bg-secondary/30 text-xs">
                       <span className="text-muted-foreground">{fan.replace("fan", "Fan ")}</span>
                       <span className="font-mono text-blue-400">{rpm.toLocaleString()} RPM</span>
@@ -333,7 +337,7 @@ export default function DashboardPage() {
             )}
 
             {/* Show message if no extended metrics available */}
-            {stats.system_health.cpu_temp === 0 && stats.system_health.board_temp === 0 && stats.system_health.voltage === 0 && (
+            {health.cpu_temp === 0 && health.board_temp === 0 && health.voltage === 0 && (
               <p className="text-xs text-muted-foreground/50 text-center pt-2">Extended metrics not available for this device</p>
             )}
           </div>
@@ -341,7 +345,7 @@ export default function DashboardPage() {
         <div className="bg-card border border-border rounded-sm p-5" data-testid="recent-alerts">
           <h3 className="text-lg font-semibold font-['Rajdhani'] mb-4">Alerts</h3>
           <div className="space-y-3">
-            {stats.alerts.map(a => {
+            {(stats.alerts || []).map(a => {
               const Icon = alertIcons[a.type] || Info; return (
                 <div key={a.id} className="flex items-start gap-3 p-2.5 rounded-sm bg-secondary/30 border border-border/50 hover:bg-secondary/50 transition-colors">
                   <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${alertColors[a.type]}`} />

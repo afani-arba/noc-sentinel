@@ -41,62 +41,68 @@ def _state_to_status(raw: str) -> str:
 
 def _normalize_bgp_peer(p: dict, sessions: list) -> dict:
     """
-    Merge BGP connection + session.
+    Merge BGP connection + session for ROS 6.x and ROS 7.x.
 
-    ROS 7.x  /routing/bgp/connection  → name, remote.as, remote.address, nexthop.address
-    ROS 7.x  /routing/bgp/session     → name, remote-as, remote-address, state, uptime, prefix-count
-    ROS 6.x  /routing/bgp/peer        → name, remote-as, remote-address, state, uptime
+    ROS 7.x /routing/bgp/connection:
+      name="Peer-PGN"  remote.address=103.28.104.208/31  remote.as=56258
+
+    ROS 7.x /routing/bgp/session:
+      name="Peer-PGN-1"  (suffix -1 added!)  remote.address=103.28.104.208 (no CIDR)
+
+    ROS 6.x /routing/bgp/peer:
+      name, remote-as, remote-address, state, uptime
     """
-    # ── Peer name ──────────────────────────────
-    name = (
-        p.get("name") or
-        p.get("instance") or
-        p.get(".id", "")
-    )
+    import re
 
-    # ── Remote AS ─────────────────────────────
-    # ROS 7 connection uses "remote.as"; ROS 6/session uses "remote-as"
+    name = p.get("name") or p.get("instance") or p.get(".id", "")
+
+    # Remote AS: ROS 7 connection = "remote.as", session/ROS6 = "remote-as"
     remote_as = (
-        p.get("remote.as") or
-        p.get("remote-as") or
-        p.get("remote_as") or
-        ""
+        p.get("remote.as") or p.get("remote-as") or p.get("remote_as") or ""
     )
 
-    # ── Remote Address ─────────────────────────
-    remote_addr = (
-        p.get("remote.address") or
-        p.get("remote-address") or
-        p.get("address") or
-        ""
-    )
+    # Remote Address: strip CIDR if present (connection has /31, session doesn't)
+    raw_addr = p.get("remote.address") or p.get("remote-address") or p.get("address") or ""
+    remote_addr = raw_addr.split("/")[0] if "/" in raw_addr else raw_addr
 
-    # ── State/Uptime — try matching session first ──
-    matched_session = next(
-        (s for s in sessions if s.get("name") == name or s.get("remote-address") == remote_addr),
-        None
-    )
+    def _ip(addr: str) -> str:
+        return (addr or "").split("/")[0].strip()
+
+    # Match session: by IP first (most reliable), then exact name, then strip -N suffix
+    matched_session = None
+    for s in sessions:
+        s_addr = _ip(s.get("remote.address") or s.get("remote-address") or "")
+        s_name = s.get("name", "")
+
+        if remote_addr and s_addr == remote_addr:
+            matched_session = s
+            break
+        if s_name == name:
+            matched_session = s
+            break
+        # ROS 7 adds "-1"/"-2" suffix: "Peer-PGN-1" -> "Peer-PGN"
+        if re.sub(r"-\d+$", "", s_name) == name:
+            matched_session = s
+            break
 
     if matched_session:
-        raw_state = (
-            matched_session.get("state") or
-            matched_session.get("established") or
-            ""
-        )
+        raw_state = matched_session.get("state") or matched_session.get("status") or ""
+        # ROS 7 sessions use flag "E" for established (no state field)
+        if not raw_state:
+            flags = str(matched_session.get("flags", "") or matched_session.get(".flags", ""))
+            if "E" in flags or "established" in flags.lower():
+                raw_state = "established"
         uptime = matched_session.get("uptime", "")
         prefix_count = matched_session.get("prefix-count", matched_session.get("prefix_count", ""))
-        # Fill missing remote-as from session if not in connection
         if not remote_as:
-            remote_as = matched_session.get("remote-as", matched_session.get("remote_as", ""))
+            remote_as = (matched_session.get("remote.as") or
+                         matched_session.get("remote-as") or
+                         matched_session.get("remote_as") or "")
         if not remote_addr:
-            remote_addr = matched_session.get("remote-address", "")
+            remote_addr = _ip(matched_session.get("remote.address") or
+                              matched_session.get("remote-address") or "")
     else:
-        raw_state = (
-            p.get("state") or
-            p.get("established") or
-            p.get("status") or
-            ""
-        )
+        raw_state = p.get("state") or p.get("established") or p.get("status") or ""
         uptime = p.get("uptime", "")
         prefix_count = p.get("prefix-count", p.get("prefix_count", ""))
 
@@ -104,7 +110,6 @@ def _normalize_bgp_peer(p: dict, sessions: list) -> dict:
 
     return {
         **p,
-        # Normalized fields for frontend
         "name": name,
         "remote-as": str(remote_as),
         "remote-address": remote_addr,

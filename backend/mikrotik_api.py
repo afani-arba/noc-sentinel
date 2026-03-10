@@ -17,39 +17,45 @@ logger = logging.getLogger(__name__)
 
 
 # ── Custom SSL Adapter for MikroTik ROS 7.x ──────────────────────────────────
-# MikroTik ROS 7.x uses cipher suites that OpenSSL 3.x rejects by default.
-# SECLEVEL=1 allows legacy ciphers (e.g., AES128-SHA, AES256-SHA) that MikroTik uses.
+# MikroTik ROS 7.x uses TLS ciphers/versions that OpenSSL 3.x rejects by default.
+# SECLEVEL=0 allows ALL ciphers; MINIMUM_SUPPORTED allows TLS 1.0/1.1/1.2/1.3.
+# OP_LEGACY_SERVER_CONNECT: OpenSSL 3.x bridging flag for legacy server hello.
 # This fixes: "sslv3 alert handshake failure" / "Cipher is (NONE)" errors.
-_MIKROTIK_CIPHERS = "DEFAULT:@SECLEVEL=1"
 
 class MikroTikSSLAdapter(HTTPAdapter):
-    """Custom HTTPS adapter with relaxed cipher policy for MikroTik ROS 7 compatibility."""
+    """Custom HTTPS adapter with maximal SSL permissiveness for MikroTik ROS 7.x."""
 
-    def init_poolmanager(self, *args, **kwargs):
+    def _make_ssl_ctx(self):
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        ctx.set_ciphers(_MIKROTIK_CIPHERS)
-        # Allow older TLS versions that MikroTik may require
-        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-        kwargs["ssl_context"] = ctx
+        try:
+            ctx.set_ciphers("ALL:@SECLEVEL=0")
+        except ssl.SSLError:
+            pass
+        try:
+            ctx.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
+        except (AttributeError, ValueError):
+            pass
+        try:
+            ctx.options |= ssl.OP_LEGACY_SERVER_CONNECT
+        except AttributeError:
+            pass
+        return ctx
+
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs["ssl_context"] = self._make_ssl_ctx()
         return super().init_poolmanager(*args, **kwargs)
 
     def proxy_manager_for(self, proxy, **proxy_kwargs):
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        ctx.set_ciphers(_MIKROTIK_CIPHERS)
-        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-        proxy_kwargs["ssl_context"] = ctx
+        proxy_kwargs["ssl_context"] = self._make_ssl_ctx()
         return super().proxy_manager_for(proxy, **proxy_kwargs)
 
 
 def _make_session() -> requests.Session:
     """Create a requests.Session with MikroTik-compatible SSL settings."""
     session = requests.Session()
-    adapter = MikroTikSSLAdapter()
-    session.mount("https://", adapter)
+    session.mount("https://", MikroTikSSLAdapter())
     return session
 
 
