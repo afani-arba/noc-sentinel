@@ -149,9 +149,9 @@ export default function DashboardPage() {
       {/* Stats */}
       <div className="grid grid-cols-2 gap-2 sm:gap-3 sm:grid-cols-3 lg:grid-cols-5">
         {[
-          { label: "Devices", value: `${stats.devices.online}/${stats.devices.total}`, sub: "online/total", icon: Server, color: "text-purple-500", bg: "bg-purple-500/10" },
-          { label: "Download", value: `${stats.total_bandwidth.download}`, sub: "Mbps", icon: ArrowDown, color: "text-blue-500", bg: "bg-blue-500/10" },
-          { label: "Upload", value: `${stats.total_bandwidth.upload}`, sub: "Mbps", icon: ArrowUp, color: "text-green-500", bg: "bg-green-500/10" },
+          { label: "Devices", value: `${stats.devices?.online ?? 0}/${stats.devices?.total ?? 0}`, sub: "online/total", icon: Server, color: "text-purple-500", bg: "bg-purple-500/10" },
+          { label: "Download", value: `${stats.total_bandwidth?.download ?? 0}`, sub: "Mbps", icon: ArrowDown, color: "text-blue-500", bg: "bg-blue-500/10" },
+          { label: "Upload", value: `${stats.total_bandwidth?.upload ?? 0}`, sub: "Mbps", icon: ArrowUp, color: "text-green-500", bg: "bg-green-500/10" },
           { label: "Avg Ping", value: `${avgPing}`, sub: "ms", icon: Activity, color: "text-cyan-500", bg: "bg-cyan-500/10" },
           { label: "Avg Jitter", value: avgJitter, sub: "ms", icon: Activity, color: "text-rose-500", bg: "bg-rose-500/10" },
         ].map((c, i) => (
