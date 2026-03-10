@@ -4,11 +4,12 @@ import api from "@/lib/api";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
   Cpu, RefreshCw, Search, RotateCcw, AlertTriangle, CheckCircle2,
-  Clock, Wifi, WifiOff, Zap, Settings, ChevronRight, Trash2,
-  LinkIcon, TriangleAlert
+  Wifi, WifiOff, Zap, Settings2, Trash2, TriangleAlert, Save,
+  Eye, EyeOff, LinkIcon, ServerIcon, AlertCircle
 } from "lucide-react";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -45,7 +46,7 @@ function StatsBar({ stats, loading }) {
 
 // ── Device Row ────────────────────────────────────────────────────────────────
 
-function DeviceRow({ device, onAction, isAdmin }) {
+function DeviceRow({ device, isAdmin }) {
   const [acting, setActing] = useState(null);
 
   const doAction = async (action, label) => {
@@ -86,13 +87,11 @@ function DeviceRow({ device, onAction, isAdmin }) {
         <td className="px-3 py-2.5">
           <div className="flex gap-1">
             <Button size="icon" variant="ghost" className="h-6 w-6" title="Reboot"
-              disabled={acting !== null}
-              onClick={() => doAction("reboot", "Reboot")}>
+              disabled={acting !== null} onClick={() => doAction("reboot", "Reboot")}>
               <RotateCcw className={`w-3 h-3 ${acting === "reboot" ? "animate-spin" : ""}`} />
             </Button>
             <Button size="icon" variant="ghost" className="h-6 w-6" title="Refresh Parameter"
-              disabled={acting !== null}
-              onClick={() => doAction("refresh", "Refresh")}>
+              disabled={acting !== null} onClick={() => doAction("refresh", "Refresh")}>
               <RefreshCw className={`w-3 h-3 ${acting === "refresh" ? "animate-spin" : ""}`} />
             </Button>
           </div>
@@ -112,7 +111,10 @@ function FaultsTab() {
 
   useEffect(() => {
     setLoading(true);
-    api.get("/genieacs/faults").then(r => setFaults(r.data)).catch(() => toast.error("Gagal memuat faults")).finally(() => setLoading(false));
+    api.get("/genieacs/faults")
+      .then(r => setFaults(r.data))
+      .catch(() => toast.error("Gagal memuat faults"))
+      .finally(() => setLoading(false));
   }, []);
 
   const deleteFault = async (id) => {
@@ -155,38 +157,151 @@ function FaultsTab() {
   );
 }
 
-// ── Connection Test ───────────────────────────────────────────────────────────
+// ── Server Config Tab ─────────────────────────────────────────────────────────
 
-function ConnectionTest() {
-  const [result, setResult] = useState(null);
+function ServerConfigTab() {
+  const [cfg, setCfg] = useState({ url: "", username: "", password: "" });
+  const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [showPwd, setShowPwd] = useState(false);
+  const [testResult, setTestResult] = useState(null);
 
-  const test = async () => {
-    setTesting(true);
+  useEffect(() => {
+    api.get("/system/genieacs-config")
+      .then(r => setCfg(c => ({ ...c, url: r.data.url || "", username: r.data.username || "" })))
+      .catch(() => {});
+  }, []);
+
+  const handleSave = async () => {
+    if (!cfg.url) { toast.error("URL GenieACS wajib diisi"); return; }
+    setSaving(true);
     try {
+      const r = await api.post("/system/save-genieacs-config", cfg);
+      toast.success(r.data.message || "Konfigurasi disimpan");
+    } catch (e) { toast.error(e.response?.data?.detail || "Gagal menyimpan"); }
+    setSaving(false);
+  };
+
+  const handleTest = async () => {
+    if (!cfg.url) { toast.error("Isi URL GenieACS dahulu"); return; }
+    setTesting(true);
+    setTestResult(null);
+    try {
+      // Simpan dulu agar test pakai config terbaru
+      await api.post("/system/save-genieacs-config", cfg);
       const r = await api.get("/genieacs/test-connection");
-      setResult(r.data);
+      setTestResult(r.data);
+      if (r.data.success) toast.success(r.data.message);
+      else toast.error(r.data.error || "Koneksi ke GenieACS gagal");
     } catch (e) {
-      setResult({ success: false, error: e.response?.data?.detail || e.message });
+      toast.error(e.response?.data?.detail || "Test koneksi gagal");
     }
     setTesting(false);
   };
 
   return (
-    <div className="flex items-center gap-3 p-3 bg-secondary/20 border border-border rounded-sm">
-      <LinkIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-      <div className="flex-1">
-        {result ? (
-          <p className={`text-xs ${result.success ? "text-green-400" : "text-red-400"}`}>
-            {result.success ? <><CheckCircle2 className="inline w-3 h-3 mr-1" />{result.message}</> : <><AlertTriangle className="inline w-3 h-3 mr-1" />{result.error}</>}
-          </p>
-        ) : (
-          <p className="text-xs text-muted-foreground">Klik untuk test koneksi ke GenieACS</p>
-        )}
+    <div className="space-y-5 max-w-xl">
+      {/* Header info */}
+      <div className="flex items-start gap-3 p-3 bg-cyan-500/10 border border-cyan-500/20 rounded-sm">
+        <ServerIcon className="w-4 h-4 text-cyan-400 flex-shrink-0 mt-0.5" />
+        <div className="text-xs text-cyan-300">
+          <p className="font-semibold mb-0.5">Konfigurasi GenieACS NBI Server</p>
+          <p className="text-cyan-300/70">Isi URL, username, dan password server GenieACS lalu klik <strong>Test Koneksi</strong> untuk memverifikasi, kemudian <strong>Simpan</strong>.</p>
+        </div>
       </div>
-      <Button size="sm" variant="outline" className="rounded-sm h-7 text-xs gap-1" onClick={test} disabled={testing}>
-        <Zap className="w-3 h-3" />{testing ? "Testing..." : "Test"}
-      </Button>
+
+      {/* Form */}
+      <div className="space-y-4">
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">
+            GenieACS URL (NBI) <span className="text-destructive">*</span>
+          </Label>
+          <Input
+            value={cfg.url}
+            onChange={e => setCfg(c => ({ ...c, url: e.target.value }))}
+            placeholder="http://10.x.x.x:7557"
+            className="rounded-sm font-mono text-xs"
+          />
+          <p className="text-[10px] text-muted-foreground">Port NBI default GenieACS adalah <code className="bg-secondary px-1 rounded">7557</code></p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Username</Label>
+            <Input
+              value={cfg.username}
+              onChange={e => setCfg(c => ({ ...c, username: e.target.value }))}
+              placeholder="admin"
+              className="rounded-sm text-xs"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Password</Label>
+            <div className="relative">
+              <Input
+                value={cfg.password}
+                onChange={e => setCfg(c => ({ ...c, password: e.target.value }))}
+                type={showPwd ? "text" : "password"}
+                placeholder={cfg.url ? "(biarkan kosong jika tidak berubah)" : ""}
+                className="rounded-sm text-xs pr-9"
+              />
+              <button type="button"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={() => setShowPwd(v => !v)}>
+                {showPwd ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Test Result */}
+      {testResult && (
+        <div className={`flex items-start gap-2 p-3 rounded-sm border text-xs ${
+          testResult.success
+            ? "bg-green-500/10 border-green-500/20 text-green-300"
+            : "bg-red-500/10 border-red-500/20 text-red-300"
+        }`}>
+          {testResult.success
+            ? <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            : <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />}
+          <div>
+            <p className="font-semibold">{testResult.success ? "Berhasil terhubung!" : "Koneksi gagal"}</p>
+            <p className="mt-0.5 opacity-80">{testResult.success ? testResult.message : testResult.error}</p>
+            {testResult.success && testResult.stats && (
+              <div className="flex gap-4 mt-2 font-mono text-[11px]">
+                <span>Total: <strong>{testResult.stats.total}</strong></span>
+                <span className="text-green-400">Online: <strong>{testResult.stats.online}</strong></span>
+                <span className="text-red-400">Offline: <strong>{testResult.stats.offline}</strong></span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex gap-2">
+        <Button onClick={handleTest} variant="outline" disabled={testing || saving} className="rounded-sm gap-2 h-9 text-xs">
+          <Zap className="w-3.5 h-3.5" />{testing ? "Testing..." : "Test Koneksi"}
+        </Button>
+        <Button onClick={handleSave} disabled={saving || testing} className="rounded-sm gap-2 h-9 text-xs">
+          <Save className="w-3.5 h-3.5" />{saving ? "Menyimpan..." : "Simpan"}
+        </Button>
+      </div>
+
+      {/* Guide */}
+      <details className="text-xs border border-border rounded-sm">
+        <summary className="cursor-pointer px-3 py-2 text-muted-foreground hover:text-foreground transition-colors select-none">
+          Cara setup GenieACS NBI ▸
+        </summary>
+        <div className="px-3 pb-3 space-y-2 font-mono text-[11px] border-t border-border mt-0 pt-3">
+          <p className="font-sans text-muted-foreground font-semibold">1. Cek status genieacs-nbi di server GenieACS:</p>
+          <p className="text-green-400 bg-secondary/30 px-2 py-1 rounded">systemctl status genieacs-nbi</p>
+          <p className="font-sans text-muted-foreground font-semibold">2. Test akses dari server NOC ke GenieACS:</p>
+          <p className="text-green-400 bg-secondary/30 px-2 py-1 rounded">curl http://10.x.x.x:7557/devices?limit=1</p>
+          <p className="font-sans text-[10px] text-muted-foreground">Jika mendapat response JSON → isi form di atas → Test Koneksi</p>
+        </div>
+      </details>
     </div>
   );
 }
@@ -203,6 +318,7 @@ export default function GenieACSPage() {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
+  const [connectionOk, setConnectionOk] = useState(null); // null=unknown, true, false
 
   const fetchDevices = useCallback(async () => {
     setLoading(true);
@@ -213,12 +329,14 @@ export default function GenieACSPage() {
       ]);
       setDevices(devRes.data);
       setStats(statsRes.data);
+      setConnectionOk(true);
     } catch (e) {
       const msg = e.response?.data?.detail || "Gagal terhubung ke GenieACS";
-      toast.error(msg);
+      if (connectionOk !== false) toast.error(msg);
+      setConnectionOk(false);
     }
     setLoading(false);
-  }, [search]);
+  }, [search]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetchDevices(); }, [fetchDevices]);
 
@@ -230,10 +348,12 @@ export default function GenieACSPage() {
   const tabs = [
     { id: "devices", label: "CPE Devices", icon: Cpu },
     { id: "faults", label: "Faults", icon: AlertTriangle },
+    ...(isAdmin ? [{ id: "config", label: "Konfigurasi Server", icon: Settings2 }] : []),
   ];
 
   return (
     <div className="space-y-4 pb-16">
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold font-['Rajdhani'] tracking-tight flex items-center gap-2">
@@ -241,17 +361,34 @@ export default function GenieACSPage() {
           </h1>
           <p className="text-xs text-muted-foreground">Manajemen CPE (modem/router pelanggan) via protocol TR-069</p>
         </div>
-        <Button variant="outline" size="sm" className="rounded-sm gap-2 self-start" onClick={fetchDevices} disabled={loading}>
-          <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2 self-start">
+          {/* Connection status badge */}
+          {connectionOk !== null && (
+            <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[10px] font-medium border ${
+              connectionOk
+                ? "bg-green-500/10 text-green-400 border-green-500/20"
+                : "bg-red-500/10 text-red-400 border-red-500/20"
+            }`}>
+              {connectionOk ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+              {connectionOk ? "Terhubung" : "Tidak terhubung"}
+            </div>
+          )}
+          <Button variant="outline" size="sm" className="rounded-sm gap-2" onClick={fetchDevices} disabled={loading}>
+            <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+          {isAdmin && (
+            <Button variant={tab === "config" ? "default" : "outline"} size="sm"
+              className="rounded-sm gap-2"
+              onClick={() => setTab("config")}>
+              <Settings2 className="w-4 h-4" /> Konfigurasi
+            </Button>
+          )}
+        </div>
       </div>
 
-      {/* Connection test */}
-      <ConnectionTest />
-
-      {/* Stats */}
-      <StatsBar stats={stats} loading={loading} />
+      {/* Stats (hidden when in config tab) */}
+      {tab !== "config" && <StatsBar stats={stats} loading={loading} />}
 
       {/* Tabs */}
       <div className="flex border-b border-border gap-1">
@@ -271,8 +408,31 @@ export default function GenieACSPage() {
 
       {/* Tab Content */}
       <div className="bg-card border border-border rounded-sm p-4">
+
+        {/* Devices Tab */}
         {tab === "devices" && (
           <>
+            {/* Not connected banner */}
+            {connectionOk === false && (
+              <div className="flex items-center gap-3 p-3 mb-4 bg-yellow-500/10 border border-yellow-500/20 rounded-sm">
+                <AlertCircle className="w-4 h-4 text-yellow-400 flex-shrink-0" />
+                <div className="flex-1">
+                  <p className="text-xs text-yellow-300 font-semibold">GenieACS belum terkonfigurasi</p>
+                  <p className="text-[11px] text-yellow-300/70">
+                    {isAdmin
+                      ? <>Klik tab <strong>Konfigurasi Server</strong> untuk menambahkan URL &amp; kredensial GenieACS.</>
+                      : "Hubungi administrator untuk mengatur koneksi GenieACS."}
+                  </p>
+                </div>
+                {isAdmin && (
+                  <Button size="sm" variant="outline" className="rounded-sm h-7 text-xs gap-1 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10"
+                    onClick={() => setTab("config")}>
+                    <Settings2 className="w-3 h-3" /> Setup
+                  </Button>
+                )}
+              </div>
+            )}
+
             {/* Search */}
             <form onSubmit={handleSearch} className="flex gap-2 mb-4">
               <div className="relative flex-1">
@@ -294,7 +454,12 @@ export default function GenieACSPage() {
               <div className="text-center py-12">
                 <Cpu className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
                 <p className="text-muted-foreground text-sm">Tidak ada perangkat ditemukan</p>
-                <p className="text-[11px] text-muted-foreground/60 mt-1">Pastikan GenieACS terhubung dan GENIEACS_URL sudah dikonfigurasi</p>
+                {isAdmin && (
+                  <Button size="sm" variant="outline" className="rounded-sm mt-3 text-xs gap-1"
+                    onClick={() => setTab("config")}>
+                    <Settings2 className="w-3 h-3" /> Setup GenieACS Server
+                  </Button>
+                )}
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -321,13 +486,12 @@ export default function GenieACSPage() {
         )}
 
         {tab === "faults" && <FaultsTab />}
-      </div>
 
-      {/* Config reminder */}
-      <div className="p-3 bg-secondary/10 border border-dashed border-border rounded-sm">
-        <p className="text-[10px] text-muted-foreground">
-          <strong>Konfigurasi:</strong> Set <code className="bg-secondary px-1 rounded">GENIEACS_URL</code>, <code className="bg-secondary px-1 rounded">GENIEACS_USERNAME</code>, dan <code className="bg-secondary px-1 rounded">GENIEACS_PASSWORD</code> di file <code className="bg-secondary px-1 rounded">/opt/noc-sentinel/backend/.env</code> lalu restart backend.
-        </p>
+        {tab === "config" && isAdmin && <ServerConfigTab />}
+
+        {tab === "config" && !isAdmin && (
+          <p className="text-muted-foreground text-sm text-center py-8">Hanya administrator yang dapat mengubah konfigurasi.</p>
+        )}
       </div>
     </div>
   );
