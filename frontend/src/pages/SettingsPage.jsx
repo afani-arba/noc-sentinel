@@ -177,9 +177,15 @@ export default function SettingsPage() {
   const [updating, setUpdating] = useState(false);
   const [updateInfo, setUpdateInfo] = useState(null);
   const [updateLog, setUpdateLog] = useState([]);
+  const [updateDone, setUpdateDone] = useState(false);
+  const [appInfo, setAppInfo] = useState(null);
+
+  useEffect(() => {
+    api.get("/system/app-info").then(r => setAppInfo(r.data)).catch(() => {});
+  }, []);
 
   const checkUpdate = async () => {
-    setChecking(true); setUpdateInfo(null);
+    setChecking(true); setUpdateInfo(null); setUpdateDone(false); setUpdateLog([]);
     try {
       const r = await api.get("/system/check-update");
       setUpdateInfo(r.data);
@@ -190,12 +196,17 @@ export default function SettingsPage() {
 
   const performUpdate = async () => {
     if (!updateInfo?.has_update) { toast.error("Tidak ada update"); return; }
-    setUpdating(true); setUpdateLog(["Memulai proses update..."]);
+    setUpdating(true); setUpdateDone(false); setUpdateLog(["Memulai proses update..."]);
     try {
       const r = await api.post("/system/perform-update");
       setUpdateLog(r.data.log || []);
-      r.data.success ? toast.success("Update berhasil! Refresh halaman.") : toast.error("Update gagal: " + (r.data.error || "?"));
-      if (r.data.success) setUpdateInfo(null);
+      if (r.data.success) {
+        toast.success("Update berhasil! Silakan reload halaman.");
+        setUpdateInfo(null);
+        setUpdateDone(true);
+      } else {
+        toast.error("Update gagal: " + (r.data.error || "?"));
+      }
     } catch (e) {
       toast.error(e.response?.data?.detail || "Update gagal");
       setUpdateLog(prev => [...prev, `Error: ${e.response?.data?.detail || e.message}`]);
@@ -218,38 +229,59 @@ export default function SettingsPage() {
           </div>
           <div>
             <h2 className="text-base sm:text-lg font-semibold font-['Rajdhani']">Update Aplikasi</h2>
-            <p className="text-[10px] sm:text-xs text-muted-foreground">Pull update dari GitHub</p>
+            <p className="text-[10px] sm:text-xs text-muted-foreground">Pull update dari GitHub dan rebuild otomatis</p>
           </div>
         </div>
 
         <div className="space-y-3">
-          <div className="flex flex-wrap gap-2 items-center">
-            <Badge variant="outline" className="rounded-sm gap-1 text-[10px]">
-              <Clock className="w-3 h-3" /> Versi
-            </Badge>
-            <span className="text-muted-foreground font-mono text-[10px]">
-              {updateInfo?.current_commit ? updateInfo.current_commit.slice(0, 7) : "Belum dicek"}
+          {/* Current version info */}
+          <div className="flex flex-wrap gap-x-4 gap-y-1 items-center text-[10px] text-muted-foreground">
+            <span className="flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              Versi saat ini:&nbsp;
+              <code className="bg-secondary px-1 rounded font-mono">
+                {appInfo?.commit ? appInfo.commit.slice(0, 7) : (updateInfo?.current_commit ? updateInfo.current_commit.slice(0, 7) : "—")}
+              </code>
             </span>
+            {(appInfo?.message || updateInfo?.current_message) && (
+              <span className="text-muted-foreground/70 truncate max-w-xs">
+                {appInfo?.message || updateInfo?.current_message}
+              </span>
+            )}
           </div>
 
+          {/* Update status card */}
           {updateInfo && (
             <div className={`p-4 rounded-sm border ${updateInfo.has_update ? 'bg-yellow-500/10 border-yellow-500/30' : 'bg-green-500/10 border-green-500/30'}`}>
               <div className="flex items-center gap-2">
                 {updateInfo.has_update
-                  ? <><Download className="w-4 h-4 text-yellow-500" /><span className="text-yellow-500 font-medium">Update Tersedia!</span></>
-                  : <><CheckCircle2 className="w-4 h-4 text-green-500" /><span className="text-green-500 font-medium">Sudah versi terbaru</span></>
+                  ? <><Download className="w-4 h-4 text-yellow-500" /><span className="text-yellow-500 font-medium text-sm">Update Tersedia!</span></>
+                  : <><CheckCircle2 className="w-4 h-4 text-green-500" /><span className="text-green-500 font-medium text-sm">Sudah versi terbaru</span></>
                 }
               </div>
-              {updateInfo.has_update && updateInfo.latest_commit && (
-                <div className="mt-2 text-xs text-muted-foreground">
-                  <p>Terbaru: <code className="bg-secondary px-1 rounded">{updateInfo.latest_commit.slice(0, 7)}</code></p>
-                  {updateInfo.commits_behind && <p>Tertinggal {updateInfo.commits_behind} commit</p>}
+              {updateInfo.has_update && (
+                <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                  {updateInfo.commits_behind > 0 && (
+                    <p>Tertinggal <span className="font-mono text-foreground">{updateInfo.commits_behind}</span> commit</p>
+                  )}
+                  {updateInfo.latest_message && (
+                    <p>Perubahan terbaru: <span className="text-foreground">{updateInfo.latest_message}</span></p>
+                  )}
+                  {updateInfo.latest_date && (
+                    <p>Tanggal: <span className="font-mono">{updateInfo.latest_date}</span></p>
+                  )}
+                  <p className="text-[10px]">
+                    Commit: <code className="bg-secondary px-1 rounded">{updateInfo.latest_commit?.slice(0, 7)}</code>
+                  </p>
                 </div>
               )}
-              {updateInfo.message && <p className="mt-2 text-xs text-muted-foreground">{updateInfo.message}</p>}
+              {updateInfo.message && !updateInfo.has_update && (
+                <p className="mt-1 text-xs text-muted-foreground">{updateInfo.message}</p>
+              )}
             </div>
           )}
 
+          {/* Update log */}
           {updateLog.length > 0 && (
             <div className="bg-secondary/30 border border-border rounded-sm p-3">
               <div className="flex items-center gap-2 mb-2">
@@ -258,26 +290,40 @@ export default function SettingsPage() {
               </div>
               <div className="font-mono text-xs space-y-1 max-h-48 overflow-y-auto">
                 {updateLog.map((log, i) => (
-                  <div key={i} className={log.startsWith('Error') ? 'text-red-400' : 'text-foreground/70'}>{log}</div>
+                  <div key={i} className={
+                    log.startsWith('Error') || log.toLowerCase().includes('gagal') ? 'text-red-400' :
+                    log.startsWith('===') || log.includes('selesai') ? 'text-green-400 font-semibold' :
+                    'text-foreground/70'
+                  }>{log}</div>
                 ))}
+                {updating && <div className="text-primary animate-pulse">Proses berjalan...</div>}
               </div>
             </div>
           )}
 
+          {/* Action buttons */}
           <div className="flex flex-wrap gap-2 pt-2">
             <Button variant="outline" size="sm" onClick={checkUpdate} disabled={checking || updating}
               className="rounded-sm gap-2 flex-1 sm:flex-none" data-testid="check-update-btn">
-              <RefreshCw className={`w-4 h-4 ${checking ? 'animate-spin' : ''}`} /> {checking ? "..." : "Cek Update"}
+              <RefreshCw className={`w-4 h-4 ${checking ? 'animate-spin' : ''}`} />
+              {checking ? "Mengecek..." : "Cek Update"}
             </Button>
             <Button size="sm" onClick={performUpdate} disabled={updating || !updateInfo?.has_update}
               className="rounded-sm gap-2 flex-1 sm:flex-none" data-testid="perform-update-btn">
-              <Download className={`w-4 h-4 ${updating ? 'animate-bounce' : ''}`} /> {updating ? "..." : "Update"}
+              <Download className={`w-4 h-4 ${updating ? 'animate-bounce' : ''}`} />
+              {updating ? "Mengupdate..." : "Update Sekarang"}
             </Button>
+            {updateDone && (
+              <Button size="sm" variant="default" onClick={() => window.location.reload()}
+                className="rounded-sm gap-2 flex-1 sm:flex-none bg-green-600 hover:bg-green-700" data-testid="reload-btn">
+                <RefreshCw className="w-4 h-4" /> Reload Halaman
+              </Button>
+            )}
           </div>
 
           <div className="p-3 bg-secondary/20 rounded-sm border border-dashed border-border">
             <p className="text-[10px] text-muted-foreground">
-              <strong>Petunjuk:</strong> Push ke GitHub dari PC terlebih dahulu, lalu "Cek Update" → "Update" di sini.
+              <strong>Cara kerja:</strong> Push kode ke GitHub dari PC → Klik "Cek Update" di sini → Klik "Update Sekarang" → Tunggu log selesai → Reload halaman.
             </p>
           </div>
         </div>
@@ -291,14 +337,16 @@ export default function SettingsPage() {
         <h2 className="text-lg font-semibold font-['Rajdhani'] mb-4">Informasi Sistem</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
           {[
-            ["Aplikasi", "NOC-SENTINEL v2.5"],
+            ["Aplikasi", appInfo?.version || "NOC-SENTINEL v2.5"],
+            ["Commit", appInfo?.commit ? appInfo.commit.slice(0, 7) : "—"],
+            ["Update", appInfo?.date || "—"],
             ["Backend", "FastAPI + Python"],
             ["Frontend", "React + Tailwind"],
             ["Database", "MongoDB + InfluxDB"],
           ].map(([label, val]) => (
             <div key={label} className="flex justify-between p-2 bg-secondary/20 rounded-sm">
               <span className="text-muted-foreground">{label}</span>
-              <span className="font-mono">{val}</span>
+              <span className="font-mono text-right">{val}</span>
             </div>
           ))}
         </div>
@@ -306,3 +354,4 @@ export default function SettingsPage() {
     </div>
   );
 }
+

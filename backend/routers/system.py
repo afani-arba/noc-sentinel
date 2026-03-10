@@ -12,8 +12,15 @@ from core.auth import require_admin
 router = APIRouter(prefix="/system", tags=["system"])
 logger = logging.getLogger(__name__)
 
-# Directory of server.py parent (project root)
+# Project root: /opt/noc-sentinel  (parent of backend/)
 APP_DIR = str(Path(__file__).parent.parent.parent)
+BACKEND_DIR = str(Path(__file__).parent.parent)
+FRONTEND_DIR = str(Path(__file__).parent.parent.parent / "frontend")
+
+# Candidate paths
+VENV_PIP  = str(Path(BACKEND_DIR) / "venv" / "bin" / "pip")
+UPDATE_SH = str(Path(APP_DIR) / "update.sh")
+SERVICE_NAME = "noc-backend"
 
 
 @router.get("/check-update")
@@ -25,15 +32,25 @@ async def check_update(user=Depends(require_admin)):
         )
         current_commit = current.stdout.strip() if current.returncode == 0 else None
 
+        # Get current commit message
+        current_msg = ""
+        if current_commit:
+            msg_result = subprocess.run(
+                ["git", "log", "-1", "--pretty=%s"], capture_output=True, text=True, cwd=APP_DIR, timeout=10
+            )
+            current_msg = msg_result.stdout.strip() if msg_result.returncode == 0 else ""
+
         fetch = subprocess.run(
             ["git", "fetch", "origin"], capture_output=True, text=True, cwd=APP_DIR, timeout=30
         )
         if fetch.returncode != 0:
             return {
                 "has_update": False, "current_commit": current_commit,
+                "current_message": current_msg,
                 "message": "Tidak dapat terhubung ke repository.", "error": fetch.stderr
             }
 
+        # Try main, then master
         remote = subprocess.run(
             ["git", "rev-parse", "origin/main"], capture_output=True, text=True, cwd=APP_DIR, timeout=10
         )
@@ -42,22 +59,47 @@ async def check_update(user=Depends(require_admin)):
                 ["git", "rev-parse", "origin/master"], capture_output=True, text=True, cwd=APP_DIR, timeout=10
             )
         if remote.returncode != 0:
-            return {"has_update": False, "current_commit": current_commit, "message": "Branch remote tidak ditemukan."}
+            return {"has_update": False, "current_commit": current_commit, "current_message": current_msg, "message": "Branch remote tidak ditemukan."}
 
         latest_commit = remote.stdout.strip()
         has_update = current_commit != latest_commit
+
         commits_behind = 0
+        latest_message = ""
+        latest_date = ""
+
         if has_update:
             count = subprocess.run(
                 ["git", "rev-list", "--count", "HEAD..origin/main"],
                 capture_output=True, text=True, cwd=APP_DIR, timeout=10
             )
             if count.returncode == 0:
-                commits_behind = int(count.stdout.strip())
+                try:
+                    commits_behind = int(count.stdout.strip())
+                except ValueError:
+                    commits_behind = 0
+
+            # Get latest commit message on remote
+            msg_r = subprocess.run(
+                ["git", "log", "origin/main", "-1", "--pretty=%s"],
+                capture_output=True, text=True, cwd=APP_DIR, timeout=10
+            )
+            latest_message = msg_r.stdout.strip() if msg_r.returncode == 0 else ""
+
+            date_r = subprocess.run(
+                ["git", "log", "origin/main", "-1", "--pretty=%ci"],
+                capture_output=True, text=True, cwd=APP_DIR, timeout=10
+            )
+            latest_date = date_r.stdout.strip()[:19] if date_r.returncode == 0 else ""
 
         return {
-            "has_update": has_update, "current_commit": current_commit,
-            "latest_commit": latest_commit, "commits_behind": commits_behind,
+            "has_update": has_update,
+            "current_commit": current_commit,
+            "current_message": current_msg,
+            "latest_commit": latest_commit,
+            "latest_message": latest_message,
+            "latest_date": latest_date,
+            "commits_behind": commits_behind,
             "message": "Update tersedia!" if has_update else "Aplikasi sudah versi terbaru."
         }
     except subprocess.TimeoutExpired:
@@ -69,63 +111,88 @@ async def check_update(user=Depends(require_admin)):
 
 @router.post("/perform-update")
 async def perform_update(user=Depends(require_admin)):
-    """Pull latest changes from GitHub — runs in background thread to avoid blocking event loop."""
+    """Pull latest changes from GitHub and rebuild frontend."""
     log = []
-    backend_dir = str(Path(__file__).parent.parent)
-    frontend_dir = str(Path(__file__).parent.parent.parent / "frontend")
 
     def _do_update():
         nonlocal log
+
+        # ── Try update.sh first (most reliable) ──────────────────────────
+        if Path(UPDATE_SH).exists():
+            log.append(f"Menjalankan update.sh...")
+            result = subprocess.run(
+                ["bash", UPDATE_SH],
+                capture_output=True, text=True, cwd=APP_DIR, timeout=600
+            )
+            output_lines = (result.stdout + result.stderr).splitlines()
+            for line in output_lines:
+                if line.strip():
+                    log.append(line.strip())
+            if result.returncode == 0:
+                log.append("Update selesai!")
+                return {"success": True, "log": log}
+            else:
+                log.append(f"update.sh gagal (exit {result.returncode}), mencoba metode manual...")
+                log = ["Fallback ke metode manual..."]
+
+        # ── Fallback: inline steps ────────────────────────────────────────
         log.append("Menjalankan git pull...")
         pull = subprocess.run(
             ["git", "pull", "origin", "main"], capture_output=True, text=True, cwd=APP_DIR, timeout=60
         )
         if pull.returncode != 0:
+            # try master
             pull = subprocess.run(
                 ["git", "pull", "origin", "master"], capture_output=True, text=True, cwd=APP_DIR, timeout=60
             )
         if pull.returncode != 0:
-            log.append(f"Error git pull: {pull.stderr}")
+            log.append(f"Error git pull: {pull.stderr.strip()}")
             return {"success": False, "log": log, "error": pull.stderr}
+        log.append(pull.stdout.strip() or "Git pull berhasil")
 
-        log.append(pull.stdout if pull.stdout else "Git pull berhasil")
-
+        # Install backend deps dengan venv pip
         log.append("Menginstall dependensi backend...")
+        pip_cmd = VENV_PIP if Path(VENV_PIP).exists() else "pip3"
         pip = subprocess.run(
-            ["pip", "install", "-r", "requirements.txt"],
-            capture_output=True, text=True, cwd=backend_dir, timeout=120
+            [pip_cmd, "install", "-r", "requirements.txt", "-q"],
+            capture_output=True, text=True, cwd=BACKEND_DIR, timeout=180
         )
-        log.append("Backend deps ok" if pip.returncode == 0 else f"Warning pip: {pip.stderr[:200]}")
+        log.append("Backend deps ok" if pip.returncode == 0 else f"Warning pip: {pip.stderr[:300]}")
 
+        # Install frontend deps
         log.append("Menginstall dependensi frontend...")
-        yarn = subprocess.run(
-            ["yarn", "install"], capture_output=True, text=True, cwd=frontend_dir, timeout=120
+        yarn_path = subprocess.run(["which", "yarn"], capture_output=True, text=True).stdout.strip() or "yarn"
+        yarn_install = subprocess.run(
+            [yarn_path, "install", "--silent"],
+            capture_output=True, text=True, cwd=FRONTEND_DIR, timeout=180
         )
-        log.append("Frontend deps ok" if yarn.returncode == 0 else f"Warning yarn: {yarn.stderr[:200]}")
+        log.append("Frontend deps ok" if yarn_install.returncode == 0 else f"Warning yarn install: {yarn_install.stderr[:300]}")
 
+        # Build frontend
         log.append("Building frontend...")
-        build = subprocess.run(
-            ["yarn", "build"], capture_output=True, text=True, cwd=frontend_dir, timeout=300
+        yarn_build = subprocess.run(
+            [yarn_path, "build"],
+            capture_output=True, text=True, cwd=FRONTEND_DIR, timeout=600,
+            env={**dict(os.environ), "CI": "false", "DISABLE_ESLINT_PLUGIN": "true"}
         )
-        log.append("Frontend build ok" if build.returncode == 0 else f"Warning build: {build.stderr[:200]}")
+        if yarn_build.returncode == 0:
+            log.append("Frontend build berhasil!")
+        else:
+            log.append(f"Warning build: {yarn_build.stderr[:400]}")
 
         # Restart service
-        log.append("Mencoba restart services...")
+        log.append(f"Merestart service {SERVICE_NAME}...")
         try:
-            subprocess.run(["sudo", "supervisorctl", "restart", "backend"], timeout=10)
-            subprocess.run(["sudo", "supervisorctl", "restart", "frontend"], timeout=10)
-            log.append("Services di-restart via supervisor")
-        except Exception:
-            for svc in ["noc-backend", "noc-sentinel", "noc-sentinel-backend"]:
-                try:
-                    r = subprocess.run(["sudo", "systemctl", "restart", svc], capture_output=True, timeout=10)
-                    if r.returncode == 0:
-                        log.append(f"{svc} di-restart via systemd")
-                        break
-                except Exception:
-                    continue
+            restart = subprocess.run(
+                ["sudo", "systemctl", "restart", SERVICE_NAME],
+                capture_output=True, text=True, timeout=30
+            )
+            if restart.returncode == 0:
+                log.append(f"Service {SERVICE_NAME} berhasil di-restart!")
             else:
-                log.append("Note: Silakan restart service secara manual")
+                log.append(f"Note: Restart manual diperlukan — sudo systemctl restart {SERVICE_NAME}")
+        except Exception as e:
+            log.append(f"Note: Silakan restart service manual: sudo systemctl restart {SERVICE_NAME}")
 
         log.append("Update selesai!")
         return {"success": True, "log": log}
@@ -137,6 +204,29 @@ async def perform_update(user=Depends(require_admin)):
         logger.error(f"Update error: {e}")
         log.append(f"Error: {str(e)}")
         return {"success": False, "log": log, "error": str(e)}
+
+
+@router.get("/app-info")
+async def app_info():
+    """Return current app version info (commit hash, message, date)."""
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=APP_DIR, timeout=5
+        )
+        msg = subprocess.run(
+            ["git", "log", "-1", "--pretty=%s"], capture_output=True, text=True, cwd=APP_DIR, timeout=5
+        )
+        date = subprocess.run(
+            ["git", "log", "-1", "--pretty=%ci"], capture_output=True, text=True, cwd=APP_DIR, timeout=5
+        )
+        return {
+            "commit": commit.stdout.strip() if commit.returncode == 0 else "unknown",
+            "message": msg.stdout.strip() if msg.returncode == 0 else "",
+            "date": date.stdout.strip()[:19] if date.returncode == 0 else "",
+            "version": "v2.5",
+        }
+    except Exception:
+        return {"commit": "unknown", "message": "", "date": "", "version": "v2.5"}
 
 
 @router.post("/save-influxdb-config")
