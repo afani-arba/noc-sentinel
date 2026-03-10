@@ -1,12 +1,13 @@
 """
 Auto-backup service for MikroTik configurations.
-Uses MikroTik API to trigger backup and export, then downloads via SSH (paramiko).
+Export strategy (in order):
+  1. SSH /export terse  (works for both RouterOS 6 and 7, most reliable)
+  2. REST API /export   (RouterOS 7+ REST API fallback)
 Backups stored in /backups/ directory relative to backend folder.
 """
 import asyncio
 import logging
 import os
-import io
 import re
 from pathlib import Path
 from datetime import datetime, timezone
@@ -19,6 +20,9 @@ logger = logging.getLogger(__name__)
 BACKUP_DIR = Path(__file__).parent.parent / "backups"
 BACKUP_DIR.mkdir(exist_ok=True)
 
+SSH_PORT = 22
+SSH_TIMEOUT = 20
+
 
 async def _get_device(device_id: str) -> Optional[dict]:
     db = get_db()
@@ -30,10 +34,83 @@ def _safe_filename(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "_", name)
 
 
+def _export_via_ssh(host: str, username: str, password: str, port: int = 22) -> Optional[str]:
+    """Run /export terse on MikroTik via SSH. Works for RouterOS 6 and 7."""
+    try:
+        import paramiko
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(
+            hostname=host,
+            port=port,
+            username=username,
+            password=password,
+            timeout=SSH_TIMEOUT,
+            look_for_keys=False,
+            allow_agent=False,
+        )
+        _, stdout, _ = client.exec_command("/export terse", timeout=60)
+        output = stdout.read().decode("utf-8", errors="replace")
+        client.close()
+        if output and len(output.strip()) > 10:
+            return output
+        logger.warning(f"SSH export returned empty output for {host}")
+        return None
+    except ImportError:
+        logger.warning("paramiko not installed — SSH export unavailable")
+        return None
+    except Exception as e:
+        logger.warning(f"SSH export failed for {host}: {e}")
+        return None
+
+
+def _export_via_rest(mt_client) -> Optional[str]:
+    """Fetch RSC config via REST API /export endpoint (RouterOS 7+)."""
+    if not hasattr(mt_client, "base_url"):
+        return None
+    try:
+        import requests
+        resp = requests.get(
+            f"{mt_client.base_url}/export",
+            auth=mt_client.auth,
+            verify=False,
+            timeout=60,
+        )
+        if resp.status_code == 200 and resp.text.strip():
+            return resp.text
+        logger.warning(f"REST /export returned HTTP {resp.status_code}")
+        return None
+    except Exception as e:
+        logger.warning(f"REST export failed: {e}")
+        return None
+
+
+def _get_rsc_export(mt_client, device: dict) -> Optional[str]:
+    """Try SSH export first, then REST API."""
+    host = getattr(mt_client, "host", None) or device.get("ip_address", "")
+    username = device.get("api_username", "admin")
+    password = device.get("api_password", "")
+
+    # Method 1: SSH — most reliable, works for ROS6 and ROS7
+    if host and username:
+        content = _export_via_ssh(host, username, password)
+        if content:
+            logger.info(f"RSC export via SSH successful for {host}")
+            return content
+
+    # Method 2: REST API — ROS7 fallback
+    content = _export_via_rest(mt_client)
+    if content:
+        logger.info(f"RSC export via REST successful")
+        return content
+
+    return None
+
+
 async def backup_device_api(device: dict) -> dict:
     """
-    Trigger MikroTik backup via API, then fetch the backup file content via API.
-    Returns: {"success": bool, "filename": str, "size": int}
+    Backup MikroTik config via SSH export (primary) or REST API (fallback).
+    Returns: {"success": bool, "filename": str, "size": int, "type": str}
     """
     device_name = _safe_filename(device.get("name", device["id"]))
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -42,18 +119,13 @@ async def backup_device_api(device: dict) -> dict:
     try:
         mt = get_api_client(device)
 
-        # Step 1: Trigger backup via API
-        await asyncio.to_thread(_run_backup, mt, backup_name, device)
-
-        # Step 2: Get RSC export (text format, always available via API)
-        rsc_content = await asyncio.to_thread(_get_rsc_export, mt)
+        rsc_content = await asyncio.to_thread(_get_rsc_export, mt, device)
         if rsc_content:
             rsc_filename = f"{backup_name}.rsc"
             rsc_path = BACKUP_DIR / rsc_filename
             rsc_path.write_text(rsc_content, encoding="utf-8")
-            logger.info(f"RSC backup saved: {rsc_filename}")
+            logger.info(f"RSC backup saved: {rsc_filename} ({len(rsc_content)} bytes)")
 
-            # Record in DB
             db = get_db()
             await db.backups.insert_one({
                 "device_id": device["id"],
@@ -64,96 +136,24 @@ async def backup_device_api(device: dict) -> dict:
                 "size": len(rsc_content.encode()),
                 "created_at": datetime.now(timezone.utc).isoformat(),
             })
-            return {"success": True, "filename": rsc_filename, "size": len(rsc_content.encode()), "type": "rsc"}
+            return {
+                "success": True,
+                "filename": rsc_filename,
+                "size": len(rsc_content.encode()),
+                "type": "rsc",
+            }
 
-        return {"success": False, "error": "Could not retrieve RSC export from device"}
+        return {
+            "success": False,
+            "error": (
+                "Tidak dapat mengambil konfigurasi dari device. "
+                "Pastikan SSH (port 22) aktif di MikroTik: /ip service set ssh disabled=no"
+            ),
+        }
 
     except Exception as e:
         logger.error(f"Backup failed for {device.get('name', device['id'])}: {e}")
         return {"success": False, "error": str(e)}
-
-
-def _run_backup(mt_client, backup_name: str, device: dict):
-    """Synchronous: Run backup on MikroTik (REST or API)."""
-    # We use test_connection to verify device is reachable
-    pass  # Backup is done via RSC export below
-
-
-def _get_rsc_export(mt_client) -> Optional[str]:
-    """Get RSC configuration export from MikroTik via API.
-    Supports both REST API (RouterOS 7) and API Protocol (RouterOS 6).
-    """
-    # ── RouterOS 7: REST API ──────────────────────────────────────────────────
-    if hasattr(mt_client, 'base_url'):
-        try:
-            import requests
-            resp = requests.get(
-                f"{mt_client.base_url}/export",
-                auth=mt_client.auth,
-                verify=False,
-                timeout=60
-            )
-            if resp.status_code == 200 and resp.text.strip():
-                return resp.text
-            logger.warning(f"RSC export REST failed: HTTP {resp.status_code}")
-        except Exception as e:
-            logger.warning(f"RSC export via REST failed: {e}")
-
-    # ── RouterOS 6: API Protocol ──────────────────────────────────────────────
-    if hasattr(mt_client, '_get_connection'):
-        try:
-            import routeros_api
-            pool = mt_client._get_connection()
-            api = pool.get_api()
-            # Run /export on the router — returns lines as bytes
-            export_cmd = api.get_binary_resource('/')
-            response = export_cmd.call('export', {'terse': ''})
-            pool.disconnect()
-
-            # Response is a list of dicts with '!re' sentences
-            lines = []
-            for item in response:
-                if isinstance(item, dict):
-                    for v in item.values():
-                        if isinstance(v, bytes):
-                            lines.append(v.decode('utf-8', errors='replace'))
-                        elif isinstance(v, str):
-                            lines.append(v)
-            if lines:
-                return '\n'.join(lines)
-
-            # Fallback: try plain /export via sentence
-            logger.warning("API export fallback: empty response, trying raw command")
-        except Exception as e:
-            logger.warning(f"RSC export via API Protocol failed: {e}")
-
-        # Second fallback for API Protocol: use list_resource workaround
-        try:
-            def _export_cb(api):
-                # Export via /system/script — some ROS6 builds support
-                # Try direct export sentence
-                try:
-                    res = api.get_resource('/')
-                    return res.call('export', {'terse': ''})
-                except Exception:
-                    pass
-                return []
-            result = mt_client._execute(_export_cb)
-            if result:
-                lines = []
-                for item in result:
-                    if isinstance(item, dict):
-                        for v in item.values():
-                            if isinstance(v, (bytes, str)):
-                                val = v.decode('utf-8', errors='replace') if isinstance(v, bytes) else v
-                                lines.append(val)
-                if lines:
-                    return '\n'.join(lines)
-        except Exception as e:
-            logger.warning(f"RSC export fallback failed: {e}")
-
-    return None
-
 
 
 def list_backup_files() -> list:
@@ -172,7 +172,6 @@ def list_backup_files() -> list:
 
 def get_backup_path(filename: str) -> Optional[Path]:
     """Get safe path for a backup file, ensuring no path traversal."""
-    # Security: only allow alphanumeric, underscore, hyphen, dot
     if not re.match(r"^[a-zA-Z0-9_.\-]+$", filename):
         return None
     path = BACKUP_DIR / filename
