@@ -80,23 +80,80 @@ def _run_backup(mt_client, backup_name: str, device: dict):
 
 
 def _get_rsc_export(mt_client) -> Optional[str]:
-    """Get RSC configuration export from MikroTik via API."""
-    try:
-        import requests
-        # Use REST API export endpoint
-        if hasattr(mt_client, 'base_url'):
+    """Get RSC configuration export from MikroTik via API.
+    Supports both REST API (RouterOS 7) and API Protocol (RouterOS 6).
+    """
+    # ── RouterOS 7: REST API ──────────────────────────────────────────────────
+    if hasattr(mt_client, 'base_url'):
+        try:
+            import requests
             resp = requests.get(
                 f"{mt_client.base_url}/export",
                 auth=mt_client.auth,
                 verify=False,
-                timeout=30
+                timeout=60
             )
-            if resp.status_code == 200:
+            if resp.status_code == 200 and resp.text.strip():
                 return resp.text
-        return None
-    except Exception as e:
-        logger.warning(f"RSC export failed: {e}")
-        return None
+            logger.warning(f"RSC export REST failed: HTTP {resp.status_code}")
+        except Exception as e:
+            logger.warning(f"RSC export via REST failed: {e}")
+
+    # ── RouterOS 6: API Protocol ──────────────────────────────────────────────
+    if hasattr(mt_client, '_get_connection'):
+        try:
+            import routeros_api
+            pool = mt_client._get_connection()
+            api = pool.get_api()
+            # Run /export on the router — returns lines as bytes
+            export_cmd = api.get_binary_resource('/')
+            response = export_cmd.call('export', {'terse': ''})
+            pool.disconnect()
+
+            # Response is a list of dicts with '!re' sentences
+            lines = []
+            for item in response:
+                if isinstance(item, dict):
+                    for v in item.values():
+                        if isinstance(v, bytes):
+                            lines.append(v.decode('utf-8', errors='replace'))
+                        elif isinstance(v, str):
+                            lines.append(v)
+            if lines:
+                return '\n'.join(lines)
+
+            # Fallback: try plain /export via sentence
+            logger.warning("API export fallback: empty response, trying raw command")
+        except Exception as e:
+            logger.warning(f"RSC export via API Protocol failed: {e}")
+
+        # Second fallback for API Protocol: use list_resource workaround
+        try:
+            def _export_cb(api):
+                # Export via /system/script — some ROS6 builds support
+                # Try direct export sentence
+                try:
+                    res = api.get_resource('/')
+                    return res.call('export', {'terse': ''})
+                except Exception:
+                    pass
+                return []
+            result = mt_client._execute(_export_cb)
+            if result:
+                lines = []
+                for item in result:
+                    if isinstance(item, dict):
+                        for v in item.values():
+                            if isinstance(v, (bytes, str)):
+                                val = v.decode('utf-8', errors='replace') if isinstance(v, bytes) else v
+                                lines.append(val)
+                if lines:
+                    return '\n'.join(lines)
+        except Exception as e:
+            logger.warning(f"RSC export fallback failed: {e}")
+
+    return None
+
 
 
 def list_backup_files() -> list:
