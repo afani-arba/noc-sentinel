@@ -257,9 +257,45 @@ def _normalize_devices(devices: list) -> list:
                 rx_power = v
                 break
 
+        # wan_dev: shortcut ke WANDevice.1 (tempat path ZTE PON berada)
+        wan_dev1 = igd.get("WANDevice", {}).get("1", {})
+
         if not rx_power:
-            # 2. Nested ZTE paths: IGD.X_ZTE-COM_ONU_PonPower.RxPower
-            zte_nested = [
+            # 2. Path UTAMA ZTE EPON/GPON via WANDevice.1
+            #    Dari GenieACS config: WANDevice.1.X_ZTE-COM_WANPONInterfaceConfig.RXPower
+            zte_wan_configs = [
+                "X_ZTE-COM_WANPONInterfaceConfig",   # ← EXACT dari GenieACS config
+                "X_ZTE-COM_WANEPONInterfaceConfig",
+                "X_ZTE-COM_WANGPONInterfaceConfig",
+            ]
+            for cfg_key in zte_wan_configs:
+                cfg_obj = wan_dev1.get(cfg_key, {})
+                if isinstance(cfg_obj, dict):
+                    v = _val(cfg_obj, "RXPower") or _val(cfg_obj, "RxPower") or _val(cfg_obj, "Rx_Power")
+                    if v and v not in ("0", "0.0", "N/A"):
+                        rx_power = v
+                        break
+
+        if not rx_power:
+            # 3. CT-COM paths via WANDevice.1
+            #    Dari GenieACS config: WANDevice.1.X_CT-COM_GponInterfaceConfig.RXPower
+            #                          WANDevice.1.X_CT-COM_EponInterfaceConfig.RXPower
+            ct_wan_configs = [
+                "X_CT-COM_GponInterfaceConfig",
+                "X_CT-COM_EponInterfaceConfig",
+                "X_CT-COM_WANPONInterfaceConfig",
+            ]
+            for cfg_key in ct_wan_configs:
+                cfg_obj = wan_dev1.get(cfg_key, {})
+                if isinstance(cfg_obj, dict):
+                    v = _val(cfg_obj, "RXPower") or _val(cfg_obj, "RxPower")
+                    if v and v not in ("0", "0.0", "N/A"):
+                        rx_power = v
+                        break
+
+        if not rx_power:
+            # 4. Nested ZTE paths langsung di IGD (older firmware)
+            for parent_key, child_key in [
                 ("X_ZTE-COM_ONU_PonPower",     "RxPower"),
                 ("X_ZTE-COM_ONU_PonPower",     "Rx_Power"),
                 ("X_ZTE-COM_GponOnu",          "RxPower"),
@@ -267,54 +303,16 @@ def _normalize_devices(devices: list) -> list:
                 ("X_ZTE-COM_OntOptics",        "RxPower"),
                 ("X_ZTE-COM_EponOnu",          "RxPower"),
                 ("X_ZTE-COM_GPON",             "RxPower"),
-            ]
-            for parent_key, child_key in zte_nested:
-                parent = igd.get(parent_key, {})
-                if isinstance(parent, dict):
-                    v = _val(parent, child_key)
-                    if v and v not in ("0", "0.0", "N/A"):
-                        rx_power = v
-                        break
-
-        if not rx_power:
-            # 3. Flat ZTE keys directly in IGD (older firmware style)
-            for xkey in [
-                "X_ZTE-COM_ONU_PonPower_RxPower",
-                "X_ZTE-COM_GponOnu_RxPower",
-                "X_ZTE-COM_OntOptics_RxPower",
-                "X_ZTE-COM_EponOnu_RxPower",
+                ("X_FIBERHOME-COM_GponStatus", "RxPower"),
+                ("X_CT-COM_GponOntPower",      "RxPower"),
             ]:
-                val = igd.get(xkey, {})
-                if isinstance(val, dict):
-                    v = str(val.get("_value", ""))
-                    if v and v not in ("0", "0.0"):
-                        rx_power = v
-                        break
-
-        if not rx_power:
-            # 4. FiberHome / Huawei / CT-COM nested paths
-            other_nested = [
-                ("X_FIBERHOME-COM_GponStatus",  "RxPower"),
-                ("X_FIBERHOME-COM_GponStatus",  "Rx_Power"),
-                ("X_HW_WanDev",                 "ReceivedOpticalPower"),
-                ("X_CT-COM_GponOntPower",        "RxPower"),
-            ]
-            for parent_key, child_key in other_nested:
                 parent = igd.get(parent_key, {})
                 if isinstance(parent, dict):
                     v = _val(parent, child_key)
                     if v and v not in ("0", "0.0", "N/A"):
                         rx_power = v
                         break
-            # flat fallback
-            if not rx_power:
-                for xkey in ["X_HW_ReceivedOpticalPower", "X_GponRxPower"]:
-                    val = igd.get(xkey, {})
-                    if isinstance(val, dict):
-                        v = str(val.get("_value", ""))
-                        if v and v not in ("0", "0.0"):
-                            rx_power = v
-                            break
+
 
         result.append({
             "id": device_id,
