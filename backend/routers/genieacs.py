@@ -231,9 +231,24 @@ def _normalize_devices(devices: list) -> list:
         rx_power = ""
 
         # 1. VirtualParameters (custom GenieACS virtualParameters)
+        #    Nama sesuai label GenieACS UI: "Optic Rx Power" → kemungkinan OpticRxPower
         vp = d.get("VirtualParameters", {})
-        for vp_key in ["OpticalRxPower", "RxPower", "RxSignal", "PonRxPower", "GponRxPower",
-                       "rx_power", "rxPower", "optical_rx_power", "RxOpticalPower"]:
+        for vp_key in [
+            "OpticRxPower",        # "Optic Rx Power" di GenieACS UI ZTE EPON
+            "opticRxPower",
+            "optic_rx_power",
+            "OpticalRxPower",
+            "RxPower",
+            "rxPower",
+            "rx_power",
+            "EponRxPower",
+            "eponRxPower",
+            "PonRxPower",
+            "GponRxPower",
+            "RxSignal",
+            "RxOpticalPower",
+            "optical_rx_power",
+        ]:
             v = _val(vp, vp_key)
             if v and v not in ("0", "0.0", "N/A", "n/a"):
                 rx_power = v
