@@ -158,30 +158,19 @@ async def generate_report(data: ReportRequest, user=Depends(get_current_user)):
             continue
         try:
             mt = get_api_client(dev)
-            # PPPoE
-            def _get_pppoe(mt=mt):
-                try: return mt.get("/ppp/secret")
-                except: return []
-            def _get_pppoe_active(mt=mt):
-                try: return mt.get("/ppp/active")
-                except: return []
-            def _get_hs(mt=mt):
-                try: return mt.get("/ip/hotspot/user")
-                except: return []
-            def _get_hs_active(mt=mt):
-                try: return mt.get("/ip/hotspot/active")
-                except: return []
-            pppoe_secrets, pppoe_sessions, hs_users, hs_sessions = await asyncio.gather(
-                asyncio.to_thread(_get_pppoe),
-                asyncio.to_thread(_get_pppoe_active),
-                asyncio.to_thread(_get_hs),
-                asyncio.to_thread(_get_hs_active),
+            # MT client sudah async — await langsung, tidak perlu asyncio.to_thread
+            results = await asyncio.gather(
+                mt.list_pppoe_secrets(),
+                mt.list_pppoe_active(),
+                mt.list_hotspot_users(),
+                mt.list_hotspot_active(),
                 return_exceptions=True
             )
-            pppoe_total += len(pppoe_secrets) if isinstance(pppoe_secrets, list) else 0
-            pppoe_active += len(pppoe_sessions) if isinstance(pppoe_sessions, list) else 0
-            hotspot_total += len(hs_users) if isinstance(hs_users, list) else 0
-            hotspot_active += len(hs_sessions) if isinstance(hs_sessions, list) else 0
+            secrets_res, active_res, hs_users_res, hs_active_res = results
+            pppoe_total   += len(secrets_res)   if isinstance(secrets_res,   list) else 0
+            pppoe_active  += len(active_res)    if isinstance(active_res,    list) else 0
+            hotspot_total += len(hs_users_res)  if isinstance(hs_users_res,  list) else 0
+            hotspot_active += len(hs_active_res) if isinstance(hs_active_res, list) else 0
         except Exception as e:
             logger.debug(f"PPPoE/Hotspot count failed for {dev.get('name')}: {e}")
 
