@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/App";
 import api from "@/lib/api";
 import { toast } from "sonner";
@@ -9,7 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import {
   Cpu, RefreshCw, Search, RotateCcw, AlertTriangle, CheckCircle2,
   Wifi, WifiOff, Zap, Settings2, Trash2, TriangleAlert, Save,
-  Eye, EyeOff, LinkIcon, ServerIcon, AlertCircle
+  Eye, EyeOff, LinkIcon, ServerIcon, AlertCircle, X, Radio,
+  Gauge, Users, MonitorSmartphone, Signal, Network, ChevronRight
 } from "lucide-react";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -21,6 +22,20 @@ function timeAgo(isoStr) {
   if (diff < 3600) return `${Math.floor(diff / 60)}m lalu`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}j lalu`;
   return `${Math.floor(diff / 86400)}h lalu`;
+}
+
+function RxPowerBadge({ value }) {
+  if (!value || value === "0") return <span className="text-muted-foreground">—</span>;
+  const num = parseFloat(value);
+  let color = "text-green-400";
+  if (isNaN(num)) return <span className="font-mono text-xs text-muted-foreground">{value}</span>;
+  if (num < -27) color = "text-red-400";
+  else if (num < -25) color = "text-yellow-400";
+  return (
+    <span className={`font-mono text-xs font-semibold ${color}`}>
+      {num.toFixed(2)} <span className="text-[10px] font-normal opacity-70">dBm</span>
+    </span>
+  );
 }
 
 // ── Stats Bar ─────────────────────────────────────────────────────────────────
@@ -44,9 +59,228 @@ function StatsBar({ stats, loading }) {
   );
 }
 
+// ── Device Detail / Edit Modal ────────────────────────────────────────────────
+
+function DeviceModal({ device, onClose, isAdmin, onRefreshed }) {
+  const [form, setForm] = useState({
+    ssid: device.ssid || "",
+    wpa_key: "",
+    pppoe_username: device.pppoe_username || "",
+    pppoe_password: "",
+  });
+  const [showWpa, setShowWpa] = useState(false);
+  const [showPppPwd, setShowPppPwd] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [summoning, setSummoning] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [rebooting, setRebooting] = useState(false);
+  const overlayRef = useRef(null);
+
+  const encId = encodeURIComponent(device.id);
+
+  const setParam = async (name, value, type = "xsd:string") => {
+    await api.post(`/genieacs/devices/${encId}/set-parameter`, { name, value, type });
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const tasks = [];
+      if (form.ssid && form.ssid !== device.ssid) {
+        tasks.push(setParam(
+          "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID",
+          form.ssid
+        ));
+      }
+      if (form.wpa_key) {
+        tasks.push(setParam(
+          "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase",
+          form.wpa_key
+        ));
+      }
+      if (form.pppoe_username && form.pppoe_username !== device.pppoe_username) {
+        tasks.push(setParam(
+          "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username",
+          form.pppoe_username
+        ));
+      }
+      if (form.pppoe_password) {
+        tasks.push(setParam(
+          "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Password",
+          form.pppoe_password
+        ));
+      }
+      if (tasks.length === 0) { toast.info("Tidak ada perubahan yang disimpan"); setSaving(false); return; }
+      await Promise.all(tasks);
+      toast.success(`${tasks.length} parameter berhasil diset ke ${device.model || device.id}`);
+      onRefreshed?.();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Gagal menyimpan parameter");
+    }
+    setSaving(false);
+  };
+
+  const doAction = async (action, label, setLoading) => {
+    setLoading(true);
+    try {
+      await api.post(`/genieacs/devices/${encId}/${action}`);
+      toast.success(`${label} dikirim ke ${device.model || device.id}`);
+      if (action === "refresh") onRefreshed?.();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || `${label} gagal`);
+    }
+    setLoading(false);
+  };
+
+  const infoRows = [
+    { label: "Device ID", value: device.id, mono: true },
+    { label: "Manufacturer", value: device.manufacturer || "—" },
+    { label: "Model", value: device.model || "—" },
+    { label: "Product Class", value: device.product_class || "—" },
+    { label: "Serial", value: device.serial || "—", mono: true },
+    { label: "Firmware", value: device.firmware || "—", mono: true },
+    { label: "IP PPPoE", value: device.pppoe_ip || "—", mono: true },
+    { label: "ID PPPoE", value: device.pppoe_username || "—", mono: true },
+    { label: "SSID", value: device.ssid || "—" },
+    { label: "Active Device", value: device.active_devices ?? "—" },
+    { label: "Redaman ONT", value: device.rx_power ? `${parseFloat(device.rx_power).toFixed(2)} dBm` : "—", mono: true },
+    { label: "Uptime", value: device.uptime || "—" },
+    { label: "Terakhir Aktif", value: timeAgo(device.last_inform) },
+    { label: "Registered", value: timeAgo(device.registered) },
+  ];
+
+  return (
+    <div
+      ref={overlayRef}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      onClick={(e) => { if (e.target === overlayRef.current) onClose(); }}
+    >
+      <div className="bg-card border border-border rounded-sm w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
+        {/* Header */}
+        <div className="sticky top-0 bg-card border-b border-border px-4 py-3 flex items-center justify-between z-10">
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full flex-shrink-0 ${device.online ? "bg-green-500 animate-pulse" : "bg-red-500"}`} />
+            <span className="font-semibold text-sm font-['Rajdhani'] tracking-wide">
+              {device.model || "Device"} — Detail &amp; Edit
+            </span>
+            <Badge variant="outline" className={`text-[10px] rounded-sm ml-1 ${device.online ? "border-green-500/40 text-green-400" : "border-red-500/40 text-red-400"}`}>
+              {device.online ? "Online" : "Offline"}
+            </Badge>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="p-4 space-y-5">
+          {/* Quick Actions */}
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" className="rounded-sm h-8 text-xs gap-1.5 border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10"
+              disabled={summoning} onClick={() => doAction("summon", "Summon", setSummoning)}>
+              <Zap className={`w-3.5 h-3.5 ${summoning ? "animate-pulse" : ""}`} />
+              {summoning ? "Summoning..." : "Summon"}
+            </Button>
+            <Button size="sm" variant="outline" className="rounded-sm h-8 text-xs gap-1.5"
+              disabled={refreshing} onClick={() => doAction("refresh", "Refresh", setRefreshing)}>
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+              {refreshing ? "Refreshing..." : "Refresh"}
+            </Button>
+            {isAdmin && (
+              <Button size="sm" variant="outline" className="rounded-sm h-8 text-xs gap-1.5 border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
+                disabled={rebooting} onClick={() => doAction("reboot", "Reboot", setRebooting)}>
+                <RotateCcw className={`w-3.5 h-3.5 ${rebooting ? "animate-spin" : ""}`} />
+                {rebooting ? "Rebooting..." : "Reboot"}
+              </Button>
+            )}
+          </div>
+
+          {/* Info Grid */}
+          <div>
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-2 font-medium">Informasi Perangkat</p>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+              {infoRows.map(r => (
+                <div key={r.label} className="flex items-start justify-between py-1 border-b border-border/30 last:border-0 col-span-1">
+                  <span className="text-[11px] text-muted-foreground flex-shrink-0">{r.label}</span>
+                  <span className={`text-[11px] text-right max-w-[180px] truncate ${r.mono ? "font-mono" : ""} ${r.label === "Redaman ONT" ? (parseFloat(device.rx_power) < -27 ? "text-red-400" : parseFloat(device.rx_power) < -25 ? "text-yellow-400" : "text-green-400") : "text-foreground"}`}>
+                    {r.value}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Edit Form — Admin only */}
+          {isAdmin && (
+            <div>
+              <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-3 font-medium">Edit Parameter</p>
+              <div className="space-y-3">
+                {/* WiFi */}
+                <div className="p-3 bg-secondary/20 border border-border/50 rounded-sm space-y-3">
+                  <p className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                    <Radio className="w-3.5 h-3.5 text-primary" /> WiFi
+                  </p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">SSID</Label>
+                      <Input value={form.ssid} onChange={e => setForm(f => ({ ...f, ssid: e.target.value }))}
+                        placeholder="Nama WiFi" className="rounded-sm text-xs h-8" />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">WPA Key / Password</Label>
+                      <div className="relative">
+                        <Input value={form.wpa_key} onChange={e => setForm(f => ({ ...f, wpa_key: e.target.value }))}
+                          type={showWpa ? "text" : "password"}
+                          placeholder="(kosong = tidak diganti)" className="rounded-sm text-xs h-8 pr-8" />
+                        <button type="button" onClick={() => setShowWpa(v => !v)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                          {showWpa ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* PPPoE */}
+                <div className="p-3 bg-secondary/20 border border-border/50 rounded-sm space-y-3">
+                  <p className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                    <Network className="w-3.5 h-3.5 text-primary" /> PPPoE
+                  </p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">Username PPPoE</Label>
+                      <Input value={form.pppoe_username} onChange={e => setForm(f => ({ ...f, pppoe_username: e.target.value }))}
+                        placeholder="username@isp" className="rounded-sm text-xs h-8 font-mono" />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">Password PPPoE</Label>
+                      <div className="relative">
+                        <Input value={form.pppoe_password} onChange={e => setForm(f => ({ ...f, pppoe_password: e.target.value }))}
+                          type={showPppPwd ? "text" : "password"}
+                          placeholder="(kosong = tidak diganti)" className="rounded-sm text-xs h-8 pr-8" />
+                        <button type="button" onClick={() => setShowPppPwd(v => !v)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                          {showPppPwd ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <Button onClick={handleSave} disabled={saving} className="rounded-sm gap-2 h-9 text-xs w-full">
+                  <Save className="w-3.5 h-3.5" />{saving ? "Menyimpan..." : "Simpan Perubahan"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Device Row ────────────────────────────────────────────────────────────────
 
-function DeviceRow({ device, isAdmin }) {
+function DeviceRow({ device, isAdmin, onOpenModal }) {
   const [acting, setActing] = useState(null);
 
   const doAction = async (action, label) => {
@@ -61,42 +295,90 @@ function DeviceRow({ device, isAdmin }) {
   };
 
   return (
-    <tr className="border-b border-border/30 hover:bg-secondary/20 transition-colors">
+    <tr className="border-b border-border/30 hover:bg-secondary/20 transition-colors group">
+      {/* Device ID */}
       <td className="px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full flex-shrink-0 ${device.online ? "bg-green-500 animate-pulse" : "bg-red-500"}`} />
-          <div>
-            <p className="text-xs font-mono text-foreground truncate max-w-[200px]" title={device.id}>{device.id}</p>
-            <p className="text-[10px] text-muted-foreground">{device.serial || "—"}</p>
-          </div>
+        <div className="flex items-center gap-1.5">
+          <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${device.online ? "bg-green-500 animate-pulse" : "bg-red-500"}`} />
+          <p className="text-[11px] font-mono text-foreground truncate max-w-[160px]" title={device.id}>{device.id}</p>
         </div>
       </td>
-      <td className="px-3 py-2.5 text-xs">
-        <p className="text-foreground font-medium">{device.manufacturer || "—"}</p>
-        <p className="text-muted-foreground">{device.model || "—"}</p>
+
+      {/* ID PPPoE */}
+      <td className="px-3 py-2.5">
+        <span className="text-[11px] font-mono text-cyan-400">{device.pppoe_username || "—"}</span>
       </td>
-      <td className="px-3 py-2.5 text-xs font-mono text-muted-foreground">{device.ip || "—"}</td>
-      <td className="px-3 py-2.5 text-[10px] text-muted-foreground font-mono">{device.firmware || "—"}</td>
-      <td className="px-3 py-2.5 text-[10px] text-muted-foreground">{timeAgo(device.last_inform)}</td>
+
+      {/* Status */}
       <td className="px-3 py-2.5">
         <Badge variant="outline" className={`text-[10px] rounded-sm ${device.online ? "border-green-500/40 text-green-400" : "border-red-500/40 text-red-400"}`}>
-          {device.online ? <><Wifi className="w-2.5 h-2.5 mr-1" />Online</> : <><WifiOff className="w-2.5 h-2.5 mr-1" />Offline</>}
+          {device.online
+            ? <><Wifi className="w-2.5 h-2.5 mr-1" />Online</>
+            : <><WifiOff className="w-2.5 h-2.5 mr-1" />Offline</>}
         </Badge>
+        <p className="text-[9px] text-muted-foreground mt-0.5">{timeAgo(device.last_inform)}</p>
       </td>
-      {isAdmin && (
-        <td className="px-3 py-2.5">
-          <div className="flex gap-1">
-            <Button size="icon" variant="ghost" className="h-6 w-6" title="Reboot"
-              disabled={acting !== null} onClick={() => doAction("reboot", "Reboot")}>
-              <RotateCcw className={`w-3 h-3 ${acting === "reboot" ? "animate-spin" : ""}`} />
-            </Button>
-            <Button size="icon" variant="ghost" className="h-6 w-6" title="Refresh Parameter"
-              disabled={acting !== null} onClick={() => doAction("refresh", "Refresh")}>
-              <RefreshCw className={`w-3 h-3 ${acting === "refresh" ? "animate-spin" : ""}`} />
-            </Button>
-          </div>
-        </td>
-      )}
+
+      {/* Redaman ONT */}
+      <td className="px-3 py-2.5">
+        <RxPowerBadge value={device.rx_power} />
+      </td>
+
+      {/* Product Class */}
+      <td className="px-3 py-2.5">
+        <span className="text-[11px] text-muted-foreground">{device.product_class || "—"}</span>
+      </td>
+
+      {/* SSID */}
+      <td className="px-3 py-2.5">
+        <div className="flex items-center gap-1">
+          {device.ssid && <Radio className="w-3 h-3 text-muted-foreground flex-shrink-0" />}
+          <span className="text-[11px] text-foreground truncate max-w-[120px]" title={device.ssid}>{device.ssid || "—"}</span>
+        </div>
+      </td>
+
+      {/* Active Device */}
+      <td className="px-3 py-2.5">
+        <div className="flex items-center gap-1">
+          <Users className="w-3 h-3 text-muted-foreground" />
+          <span className="text-[11px] font-mono">{device.active_devices ?? "—"}</span>
+        </div>
+      </td>
+
+      {/* IP PPPoE */}
+      <td className="px-3 py-2.5">
+        <span className="text-[11px] font-mono text-foreground">{device.pppoe_ip || "—"}</span>
+      </td>
+
+      {/* Actions */}
+      <td className="px-3 py-2.5">
+        <div className="flex items-center gap-1">
+          {/* Summon */}
+          <Button size="icon" variant="ghost" className="h-6 w-6 text-cyan-400 hover:bg-cyan-500/10" title="Summon"
+            disabled={acting !== null} onClick={() => doAction("summon", "Summon")}>
+            <Zap className={`w-3 h-3 ${acting === "summon" ? "animate-pulse" : ""}`} />
+          </Button>
+
+          {/* Detail / Edit */}
+          <Button size="icon" variant="ghost" className="h-6 w-6" title="Detail & Edit"
+            onClick={onOpenModal}>
+            <ChevronRight className="w-3 h-3" />
+          </Button>
+
+          {isAdmin && (
+            <>
+              <Button size="icon" variant="ghost" className="h-6 w-6" title="Refresh Parameter"
+                disabled={acting !== null} onClick={() => doAction("refresh", "Refresh")}>
+                <RefreshCw className={`w-3 h-3 ${acting === "refresh" ? "animate-spin" : ""}`} />
+              </Button>
+              <Button size="icon" variant="ghost" className="h-6 w-6 text-orange-400 hover:bg-orange-500/10" title="Reboot"
+                disabled={acting !== null} onClick={() => doAction("reboot", "Reboot")}>
+                <RotateCcw className={`w-3 h-3 ${acting === "reboot" ? "animate-spin" : ""}`} />
+              </Button>
+            </>
+          )}
+        </div>
+      </td>
     </tr>
   );
 }
@@ -187,7 +469,6 @@ function ServerConfigTab() {
     setTesting(true);
     setTestResult(null);
     try {
-      // Simpan dulu agar test pakai config terbaru
       await api.post("/system/save-genieacs-config", cfg);
       const r = await api.get("/genieacs/test-connection");
       setTestResult(r.data);
@@ -201,7 +482,6 @@ function ServerConfigTab() {
 
   return (
     <div className="space-y-5 max-w-xl">
-      {/* Header info */}
       <div className="flex items-start gap-3 p-3 bg-cyan-500/10 border border-cyan-500/20 rounded-sm">
         <ServerIcon className="w-4 h-4 text-cyan-400 flex-shrink-0 mt-0.5" />
         <div className="text-xs text-cyan-300">
@@ -210,41 +490,29 @@ function ServerConfigTab() {
         </div>
       </div>
 
-      {/* Form */}
       <div className="space-y-4">
         <div className="space-y-1.5">
           <Label className="text-xs text-muted-foreground">
             GenieACS URL (NBI) <span className="text-destructive">*</span>
           </Label>
-          <Input
-            value={cfg.url}
-            onChange={e => setCfg(c => ({ ...c, url: e.target.value }))}
-            placeholder="http://10.x.x.x:7557"
-            className="rounded-sm font-mono text-xs"
-          />
+          <Input value={cfg.url} onChange={e => setCfg(c => ({ ...c, url: e.target.value }))}
+            placeholder="http://10.x.x.x:7557" className="rounded-sm font-mono text-xs" />
           <p className="text-[10px] text-muted-foreground">Port NBI default GenieACS adalah <code className="bg-secondary px-1 rounded">7557</code></p>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">Username</Label>
-            <Input
-              value={cfg.username}
-              onChange={e => setCfg(c => ({ ...c, username: e.target.value }))}
-              placeholder="admin"
-              className="rounded-sm text-xs"
-            />
+            <Input value={cfg.username} onChange={e => setCfg(c => ({ ...c, username: e.target.value }))}
+              placeholder="admin" className="rounded-sm text-xs" />
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">Password</Label>
             <div className="relative">
-              <Input
-                value={cfg.password}
-                onChange={e => setCfg(c => ({ ...c, password: e.target.value }))}
+              <Input value={cfg.password} onChange={e => setCfg(c => ({ ...c, password: e.target.value }))}
                 type={showPwd ? "text" : "password"}
                 placeholder={cfg.url ? "(biarkan kosong jika tidak berubah)" : ""}
-                className="rounded-sm text-xs pr-9"
-              />
+                className="rounded-sm text-xs pr-9" />
               <button type="button"
                 className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 onClick={() => setShowPwd(v => !v)}>
@@ -255,7 +523,6 @@ function ServerConfigTab() {
         </div>
       </div>
 
-      {/* Test Result */}
       {testResult && (
         <div className={`flex items-start gap-2 p-3 rounded-sm border text-xs ${
           testResult.success
@@ -279,7 +546,6 @@ function ServerConfigTab() {
         </div>
       )}
 
-      {/* Actions */}
       <div className="flex gap-2">
         <Button onClick={handleTest} variant="outline" disabled={testing || saving} className="rounded-sm gap-2 h-9 text-xs">
           <Zap className="w-3.5 h-3.5" />{testing ? "Testing..." : "Test Koneksi"}
@@ -289,7 +555,6 @@ function ServerConfigTab() {
         </Button>
       </div>
 
-      {/* Guide */}
       <details className="text-xs border border-border rounded-sm">
         <summary className="cursor-pointer px-3 py-2 text-muted-foreground hover:text-foreground transition-colors select-none">
           Cara setup GenieACS NBI ▸
@@ -318,7 +583,8 @@ export default function GenieACSPage() {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
-  const [connectionOk, setConnectionOk] = useState(null); // null=unknown, true, false
+  const [connectionOk, setConnectionOk] = useState(null);
+  const [selectedDevice, setSelectedDevice] = useState(null);
 
   const fetchDevices = useCallback(async () => {
     setLoading(true);
@@ -351,8 +617,24 @@ export default function GenieACSPage() {
     ...(isAdmin ? [{ id: "config", label: "Konfigurasi Server", icon: Settings2 }] : []),
   ];
 
+  // Column headers
+  const headers = [
+    "Device ID", "ID PPPoE", "Status", "Redaman ONT",
+    "Product Class", "SSID", "Active Device", "IP PPPoE", "Aksi"
+  ];
+
   return (
     <div className="space-y-4 pb-16">
+      {/* Modal */}
+      {selectedDevice && (
+        <DeviceModal
+          device={selectedDevice}
+          isAdmin={isAdmin}
+          onClose={() => setSelectedDevice(null)}
+          onRefreshed={() => { fetchDevices(); setSelectedDevice(null); }}
+        />
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
@@ -362,7 +644,6 @@ export default function GenieACSPage() {
           <p className="text-xs text-muted-foreground">Manajemen CPE (modem/router pelanggan) via protocol TR-069</p>
         </div>
         <div className="flex items-center gap-2 self-start">
-          {/* Connection status badge */}
           {connectionOk !== null && (
             <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-[10px] font-medium border ${
               connectionOk
@@ -387,7 +668,7 @@ export default function GenieACSPage() {
         </div>
       </div>
 
-      {/* Stats (hidden when in config tab) */}
+      {/* Stats */}
       {tab !== "config" && <StatsBar stats={stats} loading={loading} />}
 
       {/* Tabs */}
@@ -438,7 +719,7 @@ export default function GenieACSPage() {
               <div className="relative flex-1">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
                 <Input value={searchInput} onChange={e => setSearchInput(e.target.value)}
-                  placeholder="Cari ID, model, IP, serial..." className="pl-8 h-8 rounded-sm text-xs" />
+                  placeholder="Cari ID, PPPoE, SSID, IP..." className="pl-8 h-8 rounded-sm text-xs" />
               </div>
               <Button type="submit" size="sm" className="rounded-sm h-8 text-xs">Cari</Button>
               {search && (
@@ -463,17 +744,22 @@ export default function GenieACSPage() {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-left min-w-[700px]">
+                <table className="w-full text-left" style={{ minWidth: 900 }}>
                   <thead>
                     <tr className="border-b border-border">
-                      {["Device ID / Serial", "Produsen / Model", "IP Address", "Firmware", "Terakhir Aktif", "Status", isAdmin ? "Aksi" : ""].map(h => (
-                        <th key={h} className="px-3 py-2 text-[10px] text-muted-foreground uppercase tracking-wider font-medium">{h}</th>
+                      {headers.map(h => (
+                        <th key={h} className="px-3 py-2 text-[10px] text-muted-foreground uppercase tracking-wider font-medium whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {devices.map(d => (
-                      <DeviceRow key={d.id} device={d} isAdmin={isAdmin} />
+                      <DeviceRow
+                        key={d.id}
+                        device={d}
+                        isAdmin={isAdmin}
+                        onOpenModal={() => setSelectedDevice(d)}
+                      />
                     ))}
                   </tbody>
                 </table>

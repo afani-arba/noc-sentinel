@@ -167,20 +167,16 @@ async def list_files(user=Depends(get_current_user)):
 
 # ── Test Connection ───────────────────────────────────────────────────────────
 
-@router.get("/test-connection")
-async def test_connection(user=Depends(require_admin)):
-    """Test connectivity to GenieACS NBI."""
-    from services.genieacs_service import GENIEACS_URL
+@router.post("/devices/{device_id:path}/summon")
+async def summon_device(device_id: str, user=Depends(require_admin)):
+    """Trigger connection request to CPE (summon device to check in)."""
     try:
-        stats = await asyncio.to_thread(svc.get_stats)
-        return {
-            "success": True,
-            "url": GENIEACS_URL,
-            "message": f"Terhubung! Total CPE: {stats['total']}, Online: {stats['online']}",
-            "stats": stats,
-        }
+        result = await asyncio.to_thread(svc.summon_device, device_id)
+        return {"message": "Connection request dikirim ke device", "result": result}
+    except HTTPException:
+        raise
     except Exception as e:
-        return {"success": False, "url": GENIEACS_URL, "error": str(e)}
+        _err(e, "Summon failed")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -202,23 +198,59 @@ def _normalize_devices(devices: list) -> list:
 
         igd = d.get("InternetGatewayDevice", {})
         dev_info = igd.get("DeviceInfo", {})
-        wan = (
+
+        # WAN connection — try PPP first then IP
+        wan_conn_dev = (
             igd.get("WANDevice", {})
                .get("1", {})
                .get("WANConnectionDevice", {})
                .get("1", {})
-               .get("WANIPConnection", {})
-               .get("1", {})
         )
+        wan_ppp = wan_conn_dev.get("WANPPPConnection", {}).get("1", {})
+        wan_ip  = wan_conn_dev.get("WANIPConnection", {}).get("1", {})
+
+        pppoe_username = _val(wan_ppp, "Username") or _val(wan_ip, "Username")
+        pppoe_ip       = _val(wan_ppp, "ExternalIPAddress") or _val(wan_ip, "ExternalIPAddress")
+
+        # LAN / WiFi
+        lan1 = igd.get("LANDevice", {}).get("1", {})
+        wlan = lan1.get("WLANConfiguration", {}).get("1", {})
+        hosts = lan1.get("Hosts", {})
+        ssid          = _val(wlan, "SSID")
+        active_devices = _val(hosts, "HostNumberOfEntries") or "0"
+
+        # Redaman ONT — try common vendor-specific paths
+        rx_power = ""
+        # Try VirtualParameters first (custom GenieACS virtualParameters)
+        vp = d.get("VirtualParameters", {})
+        for vp_key in ["OpticalRxPower", "RxPower", "RxSignal", "PonRxPower", "GponRxPower"]:
+            rx_power = _val(vp, vp_key)
+            if rx_power:
+                break
+        # Fallback: vendor OUI paths inside IGD (ZTE, FiberHome, Huawei variants)
+        if not rx_power:
+            for xkey in ["X_ZTE-COM_ONU_PonPower_RxPower", "X_FIBERHOME-COM_GponStatus_RxPower",
+                         "X_HW_ReceivedOpticalPower", "X_GponRxPower"]:
+                val = igd.get(xkey, {})
+                if isinstance(val, dict):
+                    rx_power = str(val.get("_value", "")) or ""
+                if rx_power:
+                    break
 
         result.append({
             "id": d.get("_id", ""),
             "manufacturer": _val(dev_info, "Manufacturer"),
             "model": _val(dev_info, "ModelName"),
+            "product_class": _val(dev_info, "ProductClass"),
             "serial": _val(dev_info, "SerialNumber"),
             "firmware": _val(dev_info, "SoftwareVersion"),
             "uptime": _val(dev_info, "UpTime"),
-            "ip": _val(wan, "ExternalIPAddress"),
+            "ip": pppoe_ip or _val(wan_ip, "ExternalIPAddress"),
+            "pppoe_username": pppoe_username,
+            "pppoe_ip": pppoe_ip,
+            "ssid": ssid,
+            "active_devices": active_devices,
+            "rx_power": rx_power,   # redaman ONT
             "last_inform": last_inform,
             "online": is_online,
             "registered": d.get("_registered", ""),

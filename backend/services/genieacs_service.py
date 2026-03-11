@@ -127,6 +127,20 @@ def set_parameter(device_id: str, param_name: str, param_value: str, param_type:
     )
 
 
+def summon_device(device_id: str) -> dict:
+    """
+    Send a connection request to the device (summon it to check in to ACS).
+    Posts an empty connection request — no task, just forces device session.
+    """
+    url = f"{GENIEACS_URL}/devices/{requests.utils.quote(device_id, safe='')}/tasks?connection_request"
+    resp = requests.post(url, json={"name": "refreshObject", "objectName": ""}, auth=_auth(), timeout=TIMEOUT)
+    # 202 = task queued (device offline, will run on next inform)
+    # 200 = task executed (device online, ran immediately)
+    if resp.status_code not in (200, 202):
+        resp.raise_for_status()
+    return {"status": resp.status_code, "queued": resp.status_code == 202}
+
+
 # ── Faults ────────────────────────────────────────────────────────────────────
 
 def get_faults(limit: int = 100) -> list:
